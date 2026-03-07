@@ -1,5 +1,9 @@
 import { refreshAccessToken, getCredentials } from "./auth";
 import { AMAZON_CONFIG } from "./config";
+import zlib from "zlib";
+import { promisify } from "util";
+
+const gunzip = promisify(zlib.gunzip);
 
 const BASE_URL = AMAZON_CONFIG.ADS_API_ENDPOINT;
 
@@ -105,14 +109,6 @@ export async function getProfiles(): Promise<AdsProfile[]> {
 // Reporting API (v3)
 // ============================================
 
-interface ReportRequest {
-  reportDate?: string;
-  startDate?: string;
-  endDate?: string;
-  metrics: string[];
-  groupBy?: string[];
-}
-
 interface ReportResponse {
   reportId: string;
   status: string;
@@ -121,7 +117,7 @@ interface ReportResponse {
 
 interface ReportStatusResponse {
   reportId: string;
-  status: "IN_PROGRESS" | "SUCCESS" | "FAILURE";
+  status: "PENDING" | "IN_PROGRESS" | "COMPLETED" | "SUCCESS" | "FAILURE";
   url?: string;
   failureReason?: string;
   fileSize?: number;
@@ -168,11 +164,10 @@ export async function requestSpReport(
         "cost",
         "purchases7d",
         "sales7d",
-        "sales14d",
       ],
       reportTypeId: "spCampaigns",
       timeUnit: "DAILY",
-      format: "GZIP_JSON",
+      format: "JSON",
     },
   };
 
@@ -186,7 +181,9 @@ export async function requestSpReport(
 }
 
 /**
- * Request a Sponsored Products advertised product report (per ASIN)
+ * Request a Sponsored Products advertised product report (per ASIN).
+ * groupBy is intentionally omitted — spAdvertisedProduct data is
+ * already at the product level.
  */
 export async function requestSpProductReport(
   startDate: string,
@@ -208,7 +205,6 @@ export async function requestSpProductReport(
         "cost",
         "purchases7d",
         "sales7d",
-        "sales14d",
       ],
       reportTypeId: "spAdvertisedProduct",
       timeUnit: "DAILY",
@@ -237,7 +233,7 @@ export async function getReportStatus(
 }
 
 /**
- * Download and parse report data
+ * Download and parse report data (GZIP_JSON format)
  */
 export async function downloadReport(
   downloadUrl: string
@@ -247,8 +243,10 @@ export async function downloadReport(
     throw new Error(`Report download failed: ${response.status}`);
   }
 
-  // Response is gzipped JSON
-  const data = await response.json();
+  // Response is gzip-compressed JSON (format: "GZIP_JSON")
+  const buffer = await response.arrayBuffer();
+  const decompressed = await gunzip(Buffer.from(buffer));
+  const data = JSON.parse(decompressed.toString("utf-8"));
   return Array.isArray(data) ? data : [];
 }
 
@@ -269,7 +267,7 @@ export async function fetchSpProductReport(
 
     const status = await getReportStatus(reportId);
 
-    if (status.status === "SUCCESS" && status.url) {
+    if ((status.status === "COMPLETED" || status.status === "SUCCESS") && status.url) {
       // 3. Download and return
       return downloadReport(status.url);
     }

@@ -1,0 +1,141 @@
+export interface Product {
+  id: string;
+  name: string;
+  code: string;
+  asin: string | null;
+  sku: string | null;
+  selling_price: number;
+  cost_price: number;
+  fba_fee_rate: number;
+  category: string | null;
+  is_archived: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DailySales {
+  id: string;
+  product_id: string;
+  date: string;
+  sessions: number;
+  orders: number;
+  sales_amount: number;
+  units_sold: number;
+  cvr: number;
+  cancellations: number;
+  source?: 'csv' | 'sp-api';
+  created_at: string;
+}
+
+export interface DailyAdvertising {
+  id: string;
+  product_id: string;
+  date: string;
+  ad_spend: number;
+  ad_sales: number;
+  impressions: number;
+  clicks: number;
+  acos: number;
+  roas: number;
+  campaign_name: string | null;
+  campaign_type: string;
+  source?: 'csv' | 'ads-api';
+  created_at: string;
+}
+
+export interface Expense {
+  id: string;
+  product_id: string | null;
+  date: string;
+  expense_type: 'fee' | 'shipping' | 'other';
+  amount: number;
+  notes: string | null;
+  created_at: string;
+}
+
+export interface Inventory {
+  id: string;
+  product_id: string;
+  current_stock: number;
+  reorder_point: number;
+  lead_days: number;
+  last_restocked_at: string | null;
+  notes: string | null;
+  updated_at: string;
+}
+
+export interface InventoryLog {
+  id: string;
+  product_id: string;
+  date: string;
+  change_amount: number;
+  change_type: 'inbound' | 'outbound' | 'adjustment';
+  notes: string | null;
+  created_at: string;
+}
+
+export interface MonthlyGoal {
+  id: string;
+  product_id: string | null;
+  year_month: string;
+  target_sales: number;
+  target_orders: number;
+  target_profit: number;
+  created_at: string;
+}
+
+// Joined/computed types
+export interface DailySalesWithProduct extends DailySales {
+  product: Product;
+}
+
+export interface ProductWithStats extends Product {
+  total_sales: number;
+  total_orders: number;
+  total_profit: number;
+  profit_rate: number;
+  total_sessions: number;
+  avg_cvr: number;
+}
+
+export interface DashboardSummary {
+  total_sales: number;
+  total_profit: number;
+  profit_rate: number;
+  total_orders: number;
+  total_sessions: number;
+  avg_cvr: number;
+  total_ad_spend: number;
+  tacos: number;
+  total_cost: number;
+  total_fees: number;
+}
+
+// API Integration types
+export interface ApiCredential {
+  id: string;
+  credential_type: 'sp-api' | 'ads-api';
+  client_id: string;
+  client_secret: string;
+  refresh_token: string;
+  access_token: string | null;
+  token_expires_at: string | null;
+  profile_id: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ApiSyncLog {
+  id: string;
+  api_type: 'sp-api-orders' | 'sp-api-inventory' | 'ads-api';
+  sync_type: 'manual' | 'cron';
+  status: 'pending' | 'running' | 'success' | 'failed';
+  start_date: string | null;
+  end_date: string | null;
+  records_processed: number;
+  error_message: string | null;
+  sync_started_at: string;
+  sync_completed_at: string | null;
+  created_at: string;
+}

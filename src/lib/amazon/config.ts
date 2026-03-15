@@ -22,8 +22,8 @@ export const AMAZON_CONFIG = {
   INITIAL_RETRY_DELAY_MS: 1000,
 
   // Report polling
-  REPORT_POLL_INTERVAL_MS: 10000, // 10 seconds
-  REPORT_MAX_POLL_ATTEMPTS: 60, // 10 minutes max
+  REPORT_POLL_INTERVAL_MS: 5000, // 5 seconds (faster polling to catch report completion)
+  REPORT_MAX_POLL_ATTEMPTS: 55, // ~275s max (fits within 300s maxDuration)
 } as const;
 
 // SP-API Report Types

@@ -22,9 +22,11 @@ interface DailyAdAggregate {
 }
 
 /**
- * Sync advertising data from Amazon Ads API to daily_advertising table
+ * Process already-downloaded Ads report data and upsert to daily_advertising.
+ * Used by the 2-phase sync route after downloading the report.
  */
-export async function syncAdvertising(
+export async function processAdsReportData(
+  reportData: AdsReportRow[],
   startDate: string,
   endDate: string
 ): Promise<SyncResult> {
@@ -46,14 +48,11 @@ export async function syncAdvertising(
     if (p.asin) asinToProductId.set(p.asin, p.id);
   }
 
-  // 2. Fetch report from Ads API (this polls until complete)
-  const reportData = await fetchSpProductReport(startDate, endDate);
-
   if (reportData.length === 0) {
     return { recordsProcessed: 0, errors: [] };
   }
 
-  // 3. Aggregate by date + ASIN
+  // 2. Aggregate by date + ASIN
   const aggregateMap = new Map<string, DailyAdAggregate>();
 
   for (const row of reportData) {
@@ -98,12 +97,12 @@ export async function syncAdvertising(
     aggregateMap.set(key, existing);
   }
 
-  // 4. Upsert to daily_advertising
+  // 3. Upsert to daily_advertising
   const records = Array.from(aggregateMap.values());
 
   for (const record of records) {
     // Check if a record from ads-api already exists for this date+product
-    const { data: existing } = await supabase
+    const { data: existingRecord } = await supabase
       .from("daily_advertising")
       .select("id")
       .eq("product_id", record.product_id)
@@ -111,7 +110,7 @@ export async function syncAdvertising(
       .eq("source", "ads-api")
       .maybeSingle();
 
-    if (existing) {
+    if (existingRecord) {
       // Update existing
       const { error } = await supabase
         .from("daily_advertising")
@@ -124,7 +123,7 @@ export async function syncAdvertising(
           roas: record.roas,
           campaign_name: record.campaign_name,
         })
-        .eq("id", existing.id);
+        .eq("id", existingRecord.id);
 
       if (error) {
         errors.push(`Failed to update ad data for ${record.date}: ${error.message}`);
@@ -146,4 +145,19 @@ export async function syncAdvertising(
   }
 
   return { recordsProcessed, errors };
+}
+
+/**
+ * Sync advertising data from Amazon Ads API to daily_advertising table.
+ * Used by the cron job (single-phase, blocking).
+ */
+export async function syncAdvertising(
+  startDate: string,
+  endDate: string
+): Promise<SyncResult> {
+  // Fetch report from Ads API (this polls until complete)
+  const reportData = await fetchSpProductReport(startDate, endDate);
+
+  // Process and upsert the data
+  return processAdsReportData(reportData, startDate, endDate);
 }

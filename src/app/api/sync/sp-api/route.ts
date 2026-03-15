@@ -1,11 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { syncOrders, syncInventory } from "@/lib/sync/sp-api-sync";
+import { syncOrders, syncInventory, syncTraffic } from "@/lib/sync/sp-api-sync";
 import {
   startSyncLog,
   completeSyncLog,
   failSyncLog,
   isSyncRunning,
 } from "@/lib/api/api-sync";
+
+// Extend Vercel function timeout to 300s (Pro plan max)
+export const maxDuration = 300;
 
 // POST: Trigger SP-API sync
 export async function POST(request: NextRequest) {
@@ -14,11 +17,17 @@ export async function POST(request: NextRequest) {
     const { syncType = "orders", startDate, endDate } = body;
 
     // Determine API type for logging
-    const apiType =
-      syncType === "inventory" ? "sp-api-inventory" : "sp-api-orders";
+    let apiType: "sp-api-orders" | "sp-api-inventory" | "sp-api-traffic";
+    if (syncType === "inventory") {
+      apiType = "sp-api-inventory";
+    } else if (syncType === "traffic") {
+      apiType = "sp-api-traffic";
+    } else {
+      apiType = "sp-api-orders";
+    }
 
     // Check if sync is already running
-    const running = await isSyncRunning(apiType as "sp-api-orders" | "sp-api-inventory");
+    const running = await isSyncRunning(apiType);
     if (running) {
       return NextResponse.json(
         { error: "A sync is already running for this API type" },
@@ -35,18 +44,15 @@ export async function POST(request: NextRequest) {
         .split("T")[0];
 
     // Create sync log
-    const syncId = await startSyncLog(
-      apiType as "sp-api-orders" | "sp-api-inventory",
-      "manual",
-      start,
-      end
-    );
+    const syncId = await startSyncLog(apiType, "manual", start, end);
 
     try {
       let result;
 
       if (syncType === "inventory") {
         result = await syncInventory();
+      } else if (syncType === "traffic") {
+        result = await syncTraffic(start, end);
       } else {
         result = await syncOrders(start, end);
       }

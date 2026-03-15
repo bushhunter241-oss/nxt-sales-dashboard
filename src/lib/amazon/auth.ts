@@ -134,7 +134,7 @@ export async function refreshAccessToken(
  */
 export async function testConnection(
   credentialType: "sp-api" | "ads-api"
-): Promise<{ success: boolean; error?: string; details?: string }> {
+): Promise<{ success: boolean; error?: string; details?: string; profiles?: Array<{ profileId: string; countryCode: string; accountName: string }> }> {
   try {
     const accessToken = await refreshAccessToken(credentialType);
 
@@ -180,9 +180,16 @@ export async function testConnection(
         };
       }
 
+      const profileList = Array.isArray(profiles) ? profiles.map((p: { profileId: number; countryCode: string; accountInfo?: { name?: string } }) => ({
+        profileId: String(p.profileId),
+        countryCode: p.countryCode || '',
+        accountName: p.accountInfo?.name || 'Unknown',
+      })) : [];
+
       return {
         success: true,
         details: `${profileCount}件のプロファイルにアクセス可能。Profile IDを設定してください。`,
+        profiles: profileList,
       };
     }
 

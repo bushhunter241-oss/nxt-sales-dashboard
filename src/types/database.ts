@@ -8,6 +8,7 @@ export interface Product {
   cost_price: number;
   fba_fee_rate: number;
   category: string | null;
+  product_group: string | null;
   is_archived: boolean;
   created_at: string;
   updated_at: string;

@@ -1,7 +1,7 @@
 import { supabase } from "@/lib/supabase";
 import type { ApiSyncLog } from "@/types/database";
 
-type ApiType = "sp-api-orders" | "sp-api-inventory" | "ads-api";
+type ApiType = "sp-api-orders" | "sp-api-inventory" | "sp-api-traffic" | "ads-api";
 type SyncType = "manual" | "cron";
 
 /**
@@ -115,15 +115,36 @@ export async function getLastSyncTime(
 
 /**
  * Check if a sync is currently running for a given API type
+ * Auto-expires stale syncs older than 10 minutes
  */
 export async function isSyncRunning(apiType: ApiType): Promise<boolean> {
   const { data } = await supabase
     .from("api_sync_logs")
-    .select("id")
+    .select("id, sync_started_at")
     .eq("api_type", apiType)
     .eq("status", "running")
     .limit(1)
     .maybeSingle();
 
-  return !!data;
+  if (!data) return false;
+
+  // Auto-expire stale syncs (older than 10 minutes)
+  const startedAt = new Date(data.sync_started_at).getTime();
+  const now = Date.now();
+  const tenMinutes = 10 * 60 * 1000;
+
+  if (now - startedAt > tenMinutes) {
+    // Mark stale sync as failed
+    await supabase
+      .from("api_sync_logs")
+      .update({
+        status: "failed",
+        error_message: "Sync timed out (auto-expired after 10 minutes)",
+        sync_completed_at: new Date().toISOString(),
+      })
+      .eq("id", data.id);
+    return false;
+  }
+
+  return true;
 }

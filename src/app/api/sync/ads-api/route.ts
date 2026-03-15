@@ -48,13 +48,16 @@ export async function POST(request: NextRequest) {
       const pendingEnd = pendingLog.end_date;
       const syncId = pendingLog.id;
 
-      // Poll for up to 270s (fits within 300s maxDuration)
+      // Poll for up to ~45s (fits within Vercel Hobby plan 60s limit)
+      // If not ready, return pending so UI can auto-retry
       let attempts = 0;
-      while (attempts < 45) {
+      const maxAttempts = 9; // 9 × 5s = 45s (leave 15s margin)
+      while (attempts < maxAttempts) {
         await sleep(5000);
         const status = await getReportStatus(pendingReportId);
 
-        if ((status.status === "COMPLETED" || status.status === "SUCCESS") && status.url) {
+        const s = status.status as string;
+        if ((s === "COMPLETED" || s === "SUCCESS") && status.url) {
           // Download and process
           const reportData = await downloadReport(status.url);
           const result = await processAdsReportData(
@@ -71,7 +74,7 @@ export async function POST(request: NextRequest) {
           });
         }
 
-        if (status.status === "FAILURE") {
+        if (s === "FAILURE") {
           const errMsg = `Report generation failed: ${status.failureReason || "Unknown"}`;
           await failSyncLog(syncId, errMsg);
           return NextResponse.json(
@@ -83,14 +86,15 @@ export async function POST(request: NextRequest) {
         attempts++;
       }
 
-      // Still not ready after 270s - return pending so user can call again
+      // Still not ready - return pending so UI can auto-retry
       return NextResponse.json(
         {
           pending: true,
           syncId,
           reportId: pendingReportId,
+          attemptsUsed: attempts,
           message:
-            "Report still generating. Click sync again to check status.",
+            "Report still generating. Will auto-retry shortly.",
         },
         { status: 202 }
       );

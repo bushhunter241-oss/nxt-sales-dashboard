@@ -487,10 +487,35 @@ function SyncControls({
       delete next[type];
       return next;
     });
+
+    // Show progress for ads-api auto-retry
+    if (type === "ads-api") {
+      setResults((prev) => ({
+        ...prev,
+        [type]: {
+          success: true,
+          message: "レポート生成をリクエスト中...",
+        },
+      }));
+    }
+
     try {
       const data = await onSync(type, startDate, endDate);
       const debugInfo = data?.debug;
       const apiErrors = data?.errors;
+
+      // Check if still pending after all retries
+      if (data?.pending) {
+        setResults((prev) => ({
+          ...prev,
+          [type]: {
+            success: false,
+            message: "レポート生成中です。数分後にもう一度「実行」をクリックしてください。",
+          },
+        }));
+        return;
+      }
+
       let message = `同期完了: ${data?.recordsProcessed ?? 0}件処理`;
       if (debugInfo) {
         message += ` (商品: ${debugInfo.totalProducts}件, ASIN有: ${debugInfo.productsWithAsin}件`;
@@ -809,19 +834,42 @@ export default function ApiIntegrationPage() {
       };
     }
 
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "同期に失敗しました");
+    // For ads-api: auto-retry loop when report is pending
+    const maxRetries = type === "ads-api" ? 12 : 0; // Up to 12 retries (~10 min total)
+    let retryCount = 0;
 
-    // Refresh data
-    await fetchData();
+    while (true) {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
 
-    // Return full response including debug info
-    return data;
+      // If pending (202), auto-retry after delay
+      if (res.status === 202 && data.pending && retryCount < maxRetries) {
+        retryCount++;
+        // Wait 30 seconds before retrying (report generation takes 3-10 min)
+        await new Promise((r) => setTimeout(r, 30000));
+        continue;
+      }
+
+      if (!res.ok && res.status !== 202) {
+        throw new Error(data.error || "同期に失敗しました");
+      }
+
+      // If still pending after all retries, show message but don't error
+      if (data.pending) {
+        await fetchData();
+        return { ...data, recordsProcessed: 0 };
+      }
+
+      // Refresh data
+      await fetchData();
+
+      // Return full response including debug info
+      return data;
+    }
   };
 
   if (loading) {

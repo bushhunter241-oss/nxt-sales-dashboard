@@ -64,6 +64,7 @@ export async function getProductSalesSummary(params: {
   startDate?: string;
   endDate?: string;
 }) {
+  // 1. Fetch sales data with product info
   let query = supabase
     .from("daily_sales")
     .select("product_id, sessions, orders, sales_amount, units_sold, product:products(*)");
@@ -74,6 +75,27 @@ export async function getProductSalesSummary(params: {
   const { data, error } = await query;
   if (error) { console.warn("getProductSalesSummary error:", error); return []; }
 
+  // 2. Fetch advertising data for the same period
+  let adQuery = supabase
+    .from("daily_advertising")
+    .select("product_id, ad_spend, ad_sales");
+
+  if (params.startDate) adQuery = adQuery.gte("date", params.startDate);
+  if (params.endDate) adQuery = adQuery.lte("date", params.endDate);
+
+  const { data: adData } = await adQuery;
+
+  // Aggregate ad spend by product
+  const adByProduct: Record<string, { ad_spend: number; ad_sales: number }> = {};
+  for (const row of adData || []) {
+    if (!adByProduct[row.product_id]) {
+      adByProduct[row.product_id] = { ad_spend: 0, ad_sales: 0 };
+    }
+    adByProduct[row.product_id].ad_spend += row.ad_spend;
+    adByProduct[row.product_id].ad_sales += row.ad_sales;
+  }
+
+  // 3. Group sales by product and calculate profit
   const grouped = (data || []).reduce((acc: Record<string, any>, row: any) => {
     const pid = row.product_id;
     if (!acc[pid]) {
@@ -92,5 +114,38 @@ export async function getProductSalesSummary(params: {
     return acc;
   }, {});
 
-  return Object.values(grouped);
+  // 4. Calculate profit for each product
+  return Object.values(grouped).map((item: any) => {
+    const product = item.product;
+    const costPrice = product?.cost_price || 0;
+    const fbaFeeRate = product?.fba_fee_rate || 15;
+    const sellingPrice = product?.selling_price || 0;
+    const ad = adByProduct[product?.id] || { ad_spend: 0, ad_sales: 0 };
+
+    // Cost calculations
+    const totalCost = costPrice * item.total_units;
+    const totalFbaFee = Math.round(item.total_sales * (fbaFeeRate / 100));
+    const totalAdSpend = ad.ad_spend;
+
+    // Gross profit = Sales - Cost - FBA Fee
+    const grossProfit = item.total_sales - totalCost - totalFbaFee;
+    // Net profit = Gross Profit - Ad Spend
+    const netProfit = grossProfit - totalAdSpend;
+    // Profit rate
+    const profitRate = item.total_sales > 0 ? (netProfit / item.total_sales) * 100 : 0;
+    // Unit profit
+    const unitProfit = item.total_units > 0 ? Math.round(netProfit / item.total_units) : 0;
+
+    return {
+      ...item,
+      total_cost: totalCost,
+      total_fba_fee: totalFbaFee,
+      total_ad_spend: totalAdSpend,
+      total_ad_sales: ad.ad_sales,
+      gross_profit: grossProfit,
+      net_profit: netProfit,
+      profit_rate: profitRate,
+      unit_profit: unitProfit,
+    };
+  });
 }

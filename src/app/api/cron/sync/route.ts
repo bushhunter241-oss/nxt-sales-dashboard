@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { syncOrders, syncInventory } from "@/lib/sync/sp-api-sync";
+import { syncOrders, syncInventory, syncTraffic } from "@/lib/sync/sp-api-sync";
 import { syncAdvertising } from "@/lib/sync/ads-api-sync";
 import {
   startSyncLog,
@@ -8,6 +8,9 @@ import {
   isSyncRunning,
 } from "@/lib/api/api-sync";
 import { getCredentials } from "@/lib/amazon/auth";
+
+// Extend Vercel function timeout to 300s (Pro plan max)
+export const maxDuration = 300;
 
 // Vercel Cron: GET /api/cron/sync
 // Runs daily at 2:00 AM JST (configured in vercel.json)
@@ -32,7 +35,7 @@ export async function GET(request: Request) {
   // --- SP-API Orders Sync ---
   const spCreds = await getCredentials("sp-api");
   if (spCreds) {
-    // Orders
+    // 1. Orders
     if (!(await isSyncRunning("sp-api-orders"))) {
       const syncId = await startSyncLog("sp-api-orders", "cron", dateStr, dateStr);
       try {
@@ -50,7 +53,7 @@ export async function GET(request: Request) {
       }
     }
 
-    // Inventory
+    // 2. Inventory
     if (!(await isSyncRunning("sp-api-inventory"))) {
       const syncId = await startSyncLog("sp-api-inventory", "cron");
       try {
@@ -65,6 +68,24 @@ export async function GET(request: Request) {
         const msg = error instanceof Error ? error.message : "Unknown error";
         await failSyncLog(syncId, msg);
         results.push({ type: "sp-api-inventory", success: false, error: msg });
+      }
+    }
+
+    // 3. Traffic (sessions)
+    if (!(await isSyncRunning("sp-api-traffic"))) {
+      const syncId = await startSyncLog("sp-api-traffic", "cron", dateStr, dateStr);
+      try {
+        const result = await syncTraffic(dateStr, dateStr);
+        await completeSyncLog(syncId, result.recordsProcessed);
+        results.push({
+          type: "sp-api-traffic",
+          success: true,
+          records: result.recordsProcessed,
+        });
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : "Unknown error";
+        await failSyncLog(syncId, msg);
+        results.push({ type: "sp-api-traffic", success: false, error: msg });
       }
     }
   } else {

@@ -140,3 +140,53 @@ export interface ApiSyncLog {
   sync_completed_at: string | null;
   created_at: string;
 }
+
+// ── 楽天 ──────────────────────────────────
+export interface RakutenProduct {
+  id: string;
+  name: string;
+  product_id: string; // 商品管理番号
+  sku: string | null;
+  selling_price: number;
+  cost_price: number;
+  fee_rate: number; // 楽天手数料率(%)
+  category: string | null;
+  product_group: string | null;
+  is_archived: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RakutenDailySales {
+  id: string;
+  product_id: string; // references rakuten_products.id
+  date: string;
+  access_count: number; // アクセス数（Amazonのsessionsに相当）
+  orders: number;
+  sales_amount: number;
+  units_sold: number;
+  cvr: number;
+  cancellations: number;
+  source: 'csv' | 'api';
+  created_at: string;
+}
+
+export interface RakutenDailyAdvertising {
+  id: string;
+  product_id: string;
+  date: string;
+  ad_spend: number;
+  ad_sales: number;
+  impressions: number;
+  clicks: number;
+  acos: number;
+  roas: number;
+  campaign_name: string | null;
+  campaign_type: string; // RPP, CPC, etc.
+  source: 'csv' | 'api';
+  created_at: string;
+}
+
+export interface RakutenDailySalesWithProduct extends RakutenDailySales {
+  rakuten_product: RakutenProduct;
+}

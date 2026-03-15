@@ -1,0 +1,9 @@
+{
+  "buildCommand": "npm run build",
+  "crons": [
+    {
+      "path": "/api/cron/sync",
+      "schedule": "0 17 * * *"
+    }
+  ]
+}

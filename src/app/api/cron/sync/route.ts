@@ -8,6 +8,8 @@ import {
   isSyncRunning,
 } from "@/lib/api/api-sync";
 import { getCredentials } from "@/lib/amazon/auth";
+import { supabase } from "@/lib/supabase";
+import { syncRakutenSales } from "@/lib/rakuten/sync";
 
 // Extend Vercel function timeout to 300s (Pro plan max)
 export const maxDuration = 300;
@@ -120,6 +122,49 @@ export async function GET(request: Request) {
       type: "ads-api",
       success: false,
       error: "No Ads API credentials configured",
+    });
+  }
+
+  // --- 楽天 RMS API Sync ---
+  try {
+    const { data: rakutenCred } = await supabase
+      .from("rakuten_api_credentials")
+      .select("*")
+      .single();
+
+    if (rakutenCred) {
+      try {
+        const result = await syncRakutenSales(
+          {
+            serviceSecret: rakutenCred.service_secret,
+            licenseKey: rakutenCred.license_key,
+          },
+          dateStr,
+          dateStr
+        );
+        results.push({
+          type: "rakuten-orders",
+          success: result.success,
+          records: result.salesUpserted ?? 0,
+          error: result.success ? undefined : result.message,
+        });
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : "Unknown error";
+        results.push({ type: "rakuten-orders", success: false, error: msg });
+      }
+    } else {
+      results.push({
+        type: "rakuten",
+        success: false,
+        error: "No Rakuten RMS credentials configured",
+      });
+    }
+  } catch {
+    // rakuten_api_credentials table may not exist yet
+    results.push({
+      type: "rakuten",
+      success: false,
+      error: "Rakuten credentials table not found",
     });
   }
 

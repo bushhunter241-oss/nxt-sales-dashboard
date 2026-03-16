@@ -735,6 +735,355 @@ function SyncHistory({ logs }: { logs: SyncLog[] }) {
   );
 }
 
+// ---- Rakuten Credential Section ----
+function RakutenCredentialSection({
+  onRefreshData,
+}: {
+  onRefreshData: () => Promise<void>;
+}) {
+  const [serviceSecret, setServiceSecret] = useState("");
+  const [licenseKey, setLicenseKey] = useState("");
+  const [showSecrets, setShowSecrets] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [isConfigured, setIsConfigured] = useState(false);
+  const [updatedAt, setUpdatedAt] = useState<string | null>(null);
+  const [testResult, setTestResult] = useState<{
+    success: boolean;
+    error?: string;
+  } | null>(null);
+
+  // Fetch Rakuten credential status
+  const fetchStatus = useCallback(async () => {
+    try {
+      const res = await fetch("/api/rakuten/credentials");
+      if (res.ok) {
+        const data = await res.json();
+        setIsConfigured(data.configured ?? false);
+        setUpdatedAt(data.updatedAt ?? null);
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchStatus();
+  }, [fetchStatus]);
+
+  const handleSave = async () => {
+    setSaving(true);
+    setTestResult(null);
+    try {
+      const res = await fetch("/api/rakuten/credentials", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          serviceSecret,
+          licenseKey,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "保存に失敗しました");
+      setServiceSecret("");
+      setLicenseKey("");
+      await fetchStatus();
+      await onRefreshData();
+    } catch (err) {
+      setTestResult({
+        success: false,
+        error: err instanceof Error ? err.message : "保存に失敗しました",
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleTest = async () => {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const res = await fetch("/api/rakuten/test", { method: "POST" });
+      const data = await res.json();
+      setTestResult({
+        success: data.success ?? false,
+        error: data.message || data.error,
+      });
+    } catch (err) {
+      setTestResult({
+        success: false,
+        error: err instanceof Error ? err.message : "テストに失敗しました",
+      });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!confirm("楽天API認証情報を削除しますか？")) return;
+    setDeleting(true);
+    try {
+      await fetch("/api/rakuten/credentials", { method: "DELETE" });
+      await fetchStatus();
+      await onRefreshData();
+      setTestResult(null);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardContent className="p-6">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-3">
+            <h3 className="text-base font-semibold">楽天 RMS API</h3>
+            {isConfigured ? (
+              <Badge
+                variant="outline"
+                className="bg-green-50 text-green-700 border-green-200"
+              >
+                <CheckCircle2 className="h-3 w-3 mr-1" />
+                接続済
+              </Badge>
+            ) : (
+              <Badge
+                variant="outline"
+                className="bg-gray-50 text-gray-500 border-gray-200"
+              >
+                <Link2Off className="h-3 w-3 mr-1" />
+                未設定
+              </Badge>
+            )}
+          </div>
+          {isConfigured && (
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleTest}
+                disabled={testing}
+              >
+                {testing ? (
+                  <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                ) : (
+                  <Link2 className="h-3 w-3 mr-1" />
+                )}
+                接続テスト
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleDelete}
+                disabled={deleting}
+                className="text-red-600 hover:text-red-700"
+              >
+                <Trash2 className="h-3 w-3 mr-1" />
+                削除
+              </Button>
+            </div>
+          )}
+        </div>
+
+        {testResult && (
+          <div
+            className={`mb-4 rounded-lg px-4 py-3 text-sm ${
+              testResult.success
+                ? "bg-green-50 text-green-800 border border-green-200"
+                : "bg-red-50 text-red-800 border border-red-200"
+            }`}
+          >
+            {testResult.success
+              ? `接続テスト成功！楽天RMS APIに正常にアクセスできます。${testResult.error ? ` (${testResult.error})` : ""}`
+              : `接続テスト失敗: ${testResult.error}`}
+          </div>
+        )}
+
+        {isConfigured ? (
+          <div className="text-sm text-[hsl(var(--muted-foreground))]">
+            <p>
+              最終更新:{" "}
+              {updatedAt
+                ? new Date(updatedAt).toLocaleString("ja-JP")
+                : "-"}
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <div className="rounded-lg bg-red-50 border border-red-200 p-3 mb-2">
+              <p className="text-sm text-red-800">
+                楽天RMS APIの「serviceSecret」と「licenseKey」を入力してください。
+                RMSの店舗設定 → API設定から取得できます。
+              </p>
+            </div>
+            <div>
+              <label className="text-sm font-medium mb-1 block">
+                Service Secret
+              </label>
+              <div className="relative">
+                <Input
+                  type={showSecrets ? "text" : "password"}
+                  value={serviceSecret}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                    setServiceSecret(e.target.value)
+                  }
+                  placeholder="SP-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowSecrets(!showSecrets)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                >
+                  {showSecrets ? (
+                    <EyeOff className="h-4 w-4" />
+                  ) : (
+                    <Eye className="h-4 w-4" />
+                  )}
+                </button>
+              </div>
+            </div>
+            <div>
+              <label className="text-sm font-medium mb-1 block">
+                License Key
+              </label>
+              <Input
+                type={showSecrets ? "text" : "password"}
+                value={licenseKey}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                  setLicenseKey(e.target.value)
+                }
+                placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+              />
+            </div>
+            <Button
+              onClick={handleSave}
+              disabled={saving || !serviceSecret || !licenseKey}
+              className="bg-[#bf0000] hover:bg-[#a00000] text-white"
+            >
+              {saving ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <Link2 className="h-4 w-4 mr-2" />
+              )}
+              保存して接続テスト
+            </Button>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ---- Rakuten Sync Controls ----
+function RakutenSyncControls() {
+  const today = new Date().toISOString().split("T")[0];
+  const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
+    .toISOString()
+    .split("T")[0];
+
+  const [startDate, setStartDate] = useState(weekAgo);
+  const [endDate, setEndDate] = useState(today);
+  const [syncing, setSyncing] = useState(false);
+  const [result, setResult] = useState<{
+    success: boolean;
+    message: string;
+  } | null>(null);
+
+  const handleSync = async () => {
+    setSyncing(true);
+    setResult(null);
+    try {
+      const res = await fetch("/api/rakuten/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dateFrom: startDate, dateTo: endDate }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.message || data.error || "同期に失敗しました");
+      }
+      setResult({
+        success: true,
+        message: `同期完了: ${data.recordsUpserted ?? data.recordsProcessed ?? 0}件処理`,
+      });
+    } catch (err) {
+      setResult({
+        success: false,
+        message: err instanceof Error ? err.message : "同期に失敗しました",
+      });
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardContent className="p-6">
+        <h3 className="text-base font-semibold mb-4">
+          楽天 手動同期
+        </h3>
+        <div className="flex gap-4 mb-4">
+          <div>
+            <label className="text-sm font-medium mb-1 block">開始日</label>
+            <Input
+              type="date"
+              value={startDate}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                setStartDate(e.target.value)
+              }
+            />
+          </div>
+          <div>
+            <label className="text-sm font-medium mb-1 block">終了日</label>
+            <Input
+              type="date"
+              value={endDate}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                setEndDate(e.target.value)
+              }
+            />
+          </div>
+        </div>
+        <div className="space-y-3">
+          <div className="flex items-center justify-between rounded-lg border p-3">
+            <div>
+              <div className="text-sm font-medium">楽天売上データ同期</div>
+              <div className="text-xs text-[hsl(var(--muted-foreground))]">
+                RMS API ・ 注文検索 → 注文詳細取得 → DB保存
+              </div>
+              {result && (
+                <div className="mt-1">
+                  <div
+                    className={`text-xs ${
+                      result.success ? "text-green-600" : "text-red-600"
+                    }`}
+                  >
+                    {result.message}
+                  </div>
+                </div>
+              )}
+            </div>
+            <Button
+              size="sm"
+              onClick={handleSync}
+              disabled={syncing}
+              className="bg-[#bf0000] hover:bg-[#a00000] text-white"
+            >
+              {syncing ? (
+                <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+              ) : (
+                <Play className="h-3 w-3 mr-1" />
+              )}
+              {syncing ? "同期中..." : "実行"}
+            </Button>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 // ---- Main Page ----
 export default function ApiIntegrationPage() {
   const [credentialStatus, setCredentialStatus] = useState<
@@ -884,7 +1233,7 @@ export default function ApiIntegrationPage() {
     <div className="space-y-6">
       <PageHeader
         title="API連携設定"
-        description="Amazon SP-API / Ads API の接続設定とデータ同期"
+        description="Amazon SP-API / Ads API / 楽天 RMS API の接続設定とデータ同期"
       />
 
       <div className="grid gap-6 lg:grid-cols-2">
@@ -910,6 +1259,15 @@ export default function ApiIntegrationPage() {
       </div>
 
       <SyncControls syncStatus={syncStatus} onSync={handleSync} />
+
+      {/* ---- 楽天 RMS API セクション ---- */}
+      <div className="border-t pt-6 mt-2">
+        <h2 className="text-lg font-bold mb-4 text-[#bf0000]">楽天 RMS API</h2>
+        <div className="grid gap-6 lg:grid-cols-2">
+          <RakutenCredentialSection onRefreshData={fetchData} />
+          <RakutenSyncControls />
+        </div>
+      </div>
 
       <SyncHistory logs={syncLogs} />
     </div>

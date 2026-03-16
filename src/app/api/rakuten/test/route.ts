@@ -47,15 +47,33 @@ export async function POST() {
       }),
     });
 
+    const bodyText = await res.text();
+
     if (!res.ok) {
-      const body = await res.text().catch(() => "");
       return NextResponse.json({
         success: false,
-        error: `API応答エラー (${res.status}): ${body.substring(0, 200)}`,
+        error: `API応答エラー (${res.status}): ${bodyText.substring(0, 300)}`,
       });
     }
 
-    const data = await res.json();
+    // HTMLが返ってきた場合（リダイレクト等）
+    if (bodyText.trimStart().startsWith("<")) {
+      return NextResponse.json({
+        success: false,
+        error: `APIがHTMLを返しました (status=${res.status}, url=${res.url}): ${bodyText.substring(0, 200)}`,
+      });
+    }
+
+    let data;
+    try {
+      data = JSON.parse(bodyText);
+    } catch {
+      return NextResponse.json({
+        success: false,
+        error: `JSONパース失敗: ${bodyText.substring(0, 300)}`,
+      });
+    }
+
     const total = data.PaginationResponseModel?.totalRecordsAmount || 0;
 
     return NextResponse.json({

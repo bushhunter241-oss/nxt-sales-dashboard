@@ -79,14 +79,14 @@ export async function POST(request: Request) {
       const cols = parseCSVLine(lines[i]);
       if (cols.length < 3) continue;
 
-      const rawDate = cols[headerMap.date] || "";
+      const rawDate = headerMap.date != null ? (cols[headerMap.date] || "") : "";
       const date = normalizeDate(rawDate);
       if (!date) continue;
 
-      const productId = (cols[headerMap.productId] || "").trim();
+      const productId = headerMap.productId != null ? (cols[headerMap.productId] || "").trim() : "";
       if (!productId) continue;
 
-      const productName = headerMap.productName !== undefined
+      const productName = headerMap.productName != null
         ? (cols[headerMap.productName] || "").trim()
         : "";
 
@@ -94,11 +94,11 @@ export async function POST(request: Request) {
         product_id: productId,
         product_name: productName,
         date,
-        ad_spend: parseNum(cols[headerMap.adSpend]),
-        ad_sales: parseNum(cols[headerMap.adSales]),
-        impressions: parseNum(cols[headerMap.impressions]),
-        clicks: parseNum(cols[headerMap.clicks]),
-        campaign_type: headerMap.campaignType !== undefined
+        ad_spend: parseNum(headerMap.adSpend != null ? cols[headerMap.adSpend] : undefined),
+        ad_sales: parseNum(headerMap.adSales != null ? cols[headerMap.adSales] : undefined),
+        impressions: parseNum(headerMap.impressions != null ? cols[headerMap.impressions] : undefined),
+        clicks: parseNum(headerMap.clicks != null ? cols[headerMap.clicks] : undefined),
+        campaign_type: headerMap.campaignType != null
           ? (cols[headerMap.campaignType] || "RPP").trim()
           : "RPP",
       });

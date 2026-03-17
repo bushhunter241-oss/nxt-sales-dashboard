@@ -92,12 +92,18 @@ export async function searchOrders(
       }),
     });
 
+    const bodyText = await res.text();
+
     if (!res.ok) {
-      const errBody = await res.text().catch(() => "");
-      throw new Error(`楽天 searchOrder failed (${res.status}): ${errBody}`);
+      throw new Error(`楽天 searchOrder failed (${res.status}): ${bodyText.substring(0, 300)}`);
     }
 
-    const data: SearchOrderResponse = await res.json();
+    let data: SearchOrderResponse;
+    try {
+      data = JSON.parse(bodyText);
+    } catch {
+      throw new Error(`楽天 searchOrder: JSONパース失敗 (status=${res.status}): ${bodyText.substring(0, 200)}`);
+    }
 
     if (data.orderNumberList && data.orderNumberList.length > 0) {
       allOrderNumbers.push(...data.orderNumberList);
@@ -140,12 +146,18 @@ export async function getOrders(
       }),
     });
 
+    const bodyText2 = await res.text();
+
     if (!res.ok) {
-      const errBody = await res.text().catch(() => "");
-      throw new Error(`楽天 getOrder failed (${res.status}): ${errBody}`);
+      throw new Error(`楽天 getOrder failed (${res.status}): ${bodyText2.substring(0, 300)}`);
     }
 
-    const data: GetOrderResponse = await res.json();
+    let data: GetOrderResponse;
+    try {
+      data = JSON.parse(bodyText2);
+    } catch {
+      throw new Error(`楽天 getOrder: JSONパース失敗 (status=${res.status}): ${bodyText2.substring(0, 200)}`);
+    }
 
     if (data.OrderModelList) {
       allOrders.push(...data.OrderModelList);

@@ -9,7 +9,8 @@ import { Select } from "@/components/ui/select";
 import { formatCurrency, formatPercent, formatNumber, getDateRange } from "@/lib/utils";
 import { getProductSalesSummary, getDailySales } from "@/lib/api/sales";
 import { getProducts } from "@/lib/api/products";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, PieChart, Pie, Cell, ReferenceLine } from "recharts";
+import { getBsrRankings } from "@/lib/api/bsr";
+import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, PieChart, Pie, Cell, ReferenceLine } from "recharts";
 import { CHART_COLORS } from "@/lib/constants";
 
 // Get group key: use DB product_group if set, otherwise fallback to name-based grouping
@@ -31,6 +32,7 @@ interface GroupedProduct {
   total_cost: number;
   total_fba_fee: number;
   total_ad_spend: number;
+  total_sessions: number;
   gross_profit: number;
   net_profit: number;
   profit_rate: number;
@@ -47,7 +49,7 @@ function groupProducts(products: any[]): GroupedProduct[] {
         groupName: key,
         children: [],
         total_sales: 0, total_orders: 0, total_units: 0,
-        total_cost: 0, total_fba_fee: 0, total_ad_spend: 0,
+        total_cost: 0, total_fba_fee: 0, total_ad_spend: 0, total_sessions: 0,
         gross_profit: 0, net_profit: 0, profit_rate: 0, unit_profit: 0,
       };
     }
@@ -59,6 +61,7 @@ function groupProducts(products: any[]): GroupedProduct[] {
     g.total_cost += p.total_cost || 0;
     g.total_fba_fee += p.total_fba_fee || 0;
     g.total_ad_spend += p.total_ad_spend || 0;
+    g.total_sessions += p.total_sessions || 0;
     g.gross_profit += p.gross_profit || 0;
     g.net_profit += p.net_profit || 0;
   }
@@ -93,6 +96,54 @@ export default function ProductAnalysisPage() {
     queryFn: () => getDailySales({ ...dateRange, productId: selectedProduct || undefined }),
     enabled: !!selectedProduct,
   });
+
+  const { data: bsrRankings = [] } = useQuery({
+    queryKey: ["bsrRankings", dateRange],
+    queryFn: () => getBsrRankings(dateRange.startDate, dateRange.endDate),
+  });
+
+  // BSR chart data - group by parent_asin (product group), show best rank over time
+  const bsrChartData = useMemo(() => {
+    if (!bsrRankings || bsrRankings.length === 0) return [];
+
+    // Group by date + group key, using parent_asin for grouping
+    const dateMap: Record<string, Record<string, number[]>> = {};
+    const groupLabels = new Map<string, string>(); // groupKey -> display label
+
+    for (const r of bsrRankings as any[]) {
+      const date = r.recorded_at?.split("T")[0] || "";
+      // Group key: parent_asin if set, otherwise fall back to individual asin
+      const groupKey = r.product?.parent_asin || r.product?.asin || r.asin;
+      // Display label: product_group name if set, otherwise product name
+      if (!groupLabels.has(groupKey)) {
+        const label = r.product?.product_group || r.product?.name || r.asin;
+        groupLabels.set(groupKey, label.length > 15 ? label.slice(0, 15) + "…" : label);
+      }
+
+      if (!dateMap[date]) dateMap[date] = {};
+      if (!dateMap[date][groupKey]) dateMap[date][groupKey] = [];
+      dateMap[date][groupKey].push(r.rank);
+    }
+
+    // Convert to chart data: use best (lowest) rank per group per date
+    const groupKeys = Array.from(groupLabels.keys());
+    const data = Object.entries(dateMap)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, groups]) => {
+        const row: Record<string, any> = { date: date.slice(5) };
+        for (const key of groupKeys) {
+          if (groups[key]) {
+            row[groupLabels.get(key)!] = Math.min(...groups[key]);
+          }
+        }
+        return row;
+      });
+
+    return {
+      data,
+      products: groupKeys.map((k) => groupLabels.get(k)!),
+    };
+  }, [bsrRankings]);
 
   // Sort function
   const sortFn = (a: any, b: any) => {
@@ -359,6 +410,45 @@ export default function ProductAnalysisPage() {
         </Card>
       </div>
 
+      {/* BSR Rankings Chart */}
+      {bsrChartData && "data" in bsrChartData && bsrChartData.data.length > 0 && (
+        <Card className="mt-6">
+          <CardHeader>
+            <CardTitle>BSRランキング推移</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ResponsiveContainer width="100%" height={350}>
+              <LineChart data={bsrChartData.data}>
+                <CartesianGrid strokeDasharray="3 3" stroke="hsl(0 0% 20%)" />
+                <XAxis dataKey="date" stroke="hsl(0 0% 50%)" fontSize={12} />
+                <YAxis
+                  stroke="hsl(0 0% 50%)"
+                  fontSize={12}
+                  reversed
+                  label={{ value: "順位", angle: -90, position: "insideLeft", style: { fill: "hsl(0 0% 50%)" } }}
+                />
+                <Tooltip
+                  contentStyle={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px" }}
+                  formatter={(value: any) => `#${value}`}
+                />
+                <Legend />
+                {bsrChartData.products.map((name: string, i: number) => (
+                  <Line
+                    key={name}
+                    type="monotone"
+                    dataKey={name}
+                    stroke={CHART_COLORS[i % CHART_COLORS.length]}
+                    strokeWidth={2}
+                    dot={{ r: 3 }}
+                    connectNulls
+                  />
+                ))}
+              </LineChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Detailed Product Table */}
       <Card className="mt-6">
         <CardHeader className="flex flex-row items-center justify-between">
@@ -380,6 +470,8 @@ export default function ProductAnalysisPage() {
                 <TableHead className="text-right">粗利</TableHead>
                 <TableHead className="text-right">純利益</TableHead>
                 <TableHead className="text-right">利益率</TableHead>
+                <TableHead className="text-right">セッション</TableHead>
+                <TableHead className="text-right">CVR</TableHead>
                 <TableHead className="text-right">個あたり利益</TableHead>
               </TableRow>
             </TableHeader>
@@ -413,6 +505,10 @@ export default function ProductAnalysisPage() {
                         <TableCell className={`text-right font-bold ${g.profit_rate >= 0 ? "text-green-500" : "text-red-500"}`}>
                           {formatPercent(g.profit_rate)}
                         </TableCell>
+                        <TableCell className="text-right font-bold">{formatNumber(g.total_sessions)}</TableCell>
+                        <TableCell className="text-right font-bold">
+                          {g.total_sessions > 0 && g.total_sessions >= g.total_orders * 0.5 ? formatPercent((g.total_orders / g.total_sessions) * 100) : "-"}
+                        </TableCell>
                         <TableCell className="text-right font-bold">{formatCurrency(g.unit_profit)}</TableCell>
                       </TableRow>
                       {/* Expanded children rows */}
@@ -438,6 +534,10 @@ export default function ProductAnalysisPage() {
                           </TableCell>
                           <TableCell className={`text-right ${(p.profit_rate || 0) >= 0 ? "text-green-500" : "text-red-500"}`}>
                             {formatPercent(p.profit_rate || 0)}
+                          </TableCell>
+                          <TableCell className="text-right">{formatNumber(p.total_sessions || 0)}</TableCell>
+                          <TableCell className="text-right">
+                            {(p.total_sessions || 0) > 0 && (p.total_sessions || 0) >= (p.total_orders || 0) * 0.5 ? formatPercent(((p.total_orders || 0) / p.total_sessions) * 100) : "-"}
                           </TableCell>
                           <TableCell className="text-right">{formatCurrency(p.unit_profit || 0)}</TableCell>
                         </TableRow>
@@ -467,6 +567,10 @@ export default function ProductAnalysisPage() {
                       <TableCell className={`text-right ${(p.profit_rate || 0) >= 0 ? "text-green-500" : "text-red-500"}`}>
                         {formatPercent(p.profit_rate || 0)}
                       </TableCell>
+                      <TableCell className="text-right">{formatNumber(p.total_sessions || 0)}</TableCell>
+                      <TableCell className="text-right">
+                        {(p.total_sessions || 0) > 0 && (p.total_sessions || 0) >= (p.total_orders || 0) * 0.5 ? formatPercent(((p.total_orders || 0) / p.total_sessions) * 100) : "-"}
+                      </TableCell>
                       <TableCell className="text-right">{formatCurrency(p.unit_profit || 0)}</TableCell>
                     </TableRow>
                   ))}
@@ -484,6 +588,12 @@ export default function ProductAnalysisPage() {
                   <TableCell className="text-right">{formatCurrency(totalSales - totalCost - totalFbaFee)}</TableCell>
                   <TableCell className={`text-right ${totalProfit >= 0 ? "text-green-500" : "text-red-500"}`}>{formatCurrency(totalProfit)}</TableCell>
                   <TableCell className={`text-right ${overallProfitRate >= 0 ? "text-green-500" : "text-red-500"}`}>{formatPercent(overallProfitRate)}</TableCell>
+                  <TableCell className="text-right">
+                    {formatNumber(sortedProducts.reduce((s: number, p: any) => s + (p.total_sessions || 0), 0))}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    {(() => { const ts = sortedProducts.reduce((s: number, p: any) => s + (p.total_sessions || 0), 0); const to = sortedProducts.reduce((s: number, p: any) => s + p.total_orders, 0); return ts > 0 && ts >= to * 0.5 ? formatPercent((to / ts) * 100) : "-"; })()}
+                  </TableCell>
                   <TableCell className="text-right">—</TableCell>
                 </TableRow>
               )}

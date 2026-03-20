@@ -1,5 +1,5 @@
 import { supabase } from "@/lib/supabase";
-import { getOrders, getOrderItems, getFbaInventory, downloadSalesTrafficReport } from "@/lib/amazon/sp-api";
+import { getOrders, getOrderItems, getFbaInventory, downloadSalesTrafficReport, getCatalogItemBSR, getListingsReportDebugInfo } from "@/lib/amazon/sp-api";
 import type { SpApiOrder } from "@/lib/amazon/sp-api";
 import type { Product } from "@/types/database";
 
@@ -327,6 +327,9 @@ export async function syncTraffic(
     console.log(`[SP-API Traffic] Processing ${dates.length} days from ${startDate} to ${endDate}`);
 
     // 3. Process each day individually (1 report per day = per-ASIN daily data)
+    // Track previous day's data to detect duplicate responses from SP-API
+    let prevDayFingerprint = "";
+
     for (const date of dates) {
       try {
         const trafficRows = await downloadSalesTrafficReport(date, date);
@@ -336,62 +339,63 @@ export async function syncTraffic(
           continue;
         }
 
-        // Aggregate sessions by product_id for this date
-        const sessionsMap = new Map<string, { sessions: number; pageViews: number }>();
+        // Aggregate sales + sessions by product_id for this date
+        const dataMap = new Map<string, { sessions: number; orders: number; sales_amount: number; units_sold: number }>();
 
         for (const row of trafficRows) {
           const productId = asinToProductId.get(row.childAsin) || asinToProductId.get(row.parentAsin);
           if (!productId) continue;
 
-          const existing = sessionsMap.get(productId) || { sessions: 0, pageViews: 0 };
+          const existing = dataMap.get(productId) || { sessions: 0, orders: 0, sales_amount: 0, units_sold: 0 };
           existing.sessions += row.browserSessions;
-          existing.pageViews += row.pageViews;
-          sessionsMap.set(productId, existing);
+          existing.orders += row.totalOrderItems;
+          existing.sales_amount += Math.round(row.orderedProductSales);
+          existing.units_sold += row.unitsOrdered;
+          dataMap.set(productId, existing);
         }
 
-        // Update daily_sales records for this date
-        for (const [productId, data] of sessionsMap) {
-          const { data: existingRecord } = await supabase
-            .from("daily_sales")
-            .select("id")
-            .eq("product_id", productId)
-            .eq("date", date)
-            .maybeSingle();
+        // Duplicate detection: create a fingerprint of this day's data
+        // If identical to previous day, SP-API likely returned cached/aggregated data
+        const fingerprint = Array.from(dataMap.entries())
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([pid, d]) => `${pid}:${d.sales_amount}:${d.units_sold}:${d.orders}`)
+          .join("|");
 
-          if (existingRecord) {
-            const { error } = await supabase
-              .from("daily_sales")
-              .update({ sessions: data.sessions })
-              .eq("id", existingRecord.id);
+        if (fingerprint === prevDayFingerprint && fingerprint !== "") {
+          console.warn(
+            `[SP-API Traffic] WARNING: ${date} has identical data to previous day — ` +
+            `SP-API may be returning cached/aggregated data. Skipping to avoid duplicates.`
+          );
+          errors.push(`${date}: Skipped — identical to previous day (possible SP-API cache issue)`);
+          continue;
+        }
+        prevDayFingerprint = fingerprint;
 
-            if (error) {
-              errors.push(`Failed to update sessions for ${date}: ${error.message}`);
-            } else {
-              recordsProcessed++;
-            }
+        // Upsert daily_sales records for this date (with full sales data)
+        for (const [productId, data] of dataMap) {
+          const { error } = await supabase.from("daily_sales").upsert(
+            {
+              product_id: productId,
+              date: date,
+              sessions: data.sessions,
+              orders: data.orders,
+              sales_amount: data.sales_amount,
+              units_sold: data.units_sold,
+              cvr: data.sessions > 0 ? Math.round((data.units_sold / data.sessions) * 10000) / 100 : 0,
+              cancellations: 0,
+              source: "csv",
+            },
+            { onConflict: "product_id,date" }
+          );
+
+          if (error) {
+            errors.push(`Failed to upsert ${date}: ${error.message}`);
           } else {
-            const { error } = await supabase.from("daily_sales").upsert(
-              {
-                product_id: productId,
-                date: date,
-                sessions: data.sessions,
-                orders: 0,
-                sales_amount: 0,
-                units_sold: 0,
-                source: "sp-api",
-              },
-              { onConflict: "product_id,date" }
-            );
-
-            if (error) {
-              errors.push(`Failed to create sessions record for ${date}: ${error.message}`);
-            } else {
-              recordsProcessed++;
-            }
+            recordsProcessed++;
           }
         }
 
-        console.log(`[SP-API Traffic] ${date}: ${sessionsMap.size} products updated`);
+        console.log(`[SP-API Traffic] ${date}: ${dataMap.size} products with sales data`);
 
       } catch (dayError) {
         const msg = dayError instanceof Error ? dayError.message : String(dayError);
@@ -408,4 +412,89 @@ export async function syncTraffic(
   }
 
   return { recordsProcessed, errors };
+}
+
+// ============================================
+// BSR Rankings → bsr_rankings sync
+// ============================================
+
+function bsrSleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Sync BSR (Best Sellers Rank) for all active products with ASINs
+ */
+export async function syncBSR(): Promise<SyncResult> {
+  const errors: string[] = [];
+  let recordsProcessed = 0;
+
+  // 1. Get all active products with ASINs
+  const { data: products } = await supabase
+    .from("products")
+    .select("id, asin, name")
+    .eq("is_archived", false)
+    .not("asin", "is", null);
+
+  if (!products || products.length === 0) {
+    return {
+      recordsProcessed: 0,
+      errors: ["ASINが設定された商品がありません"],
+    };
+  }
+
+  console.log(`[SP-API BSR] Fetching BSR for ${products.length} products`);
+
+  // 2. Fetch BSR for each product
+  for (const product of products) {
+    if (!product.asin) continue;
+
+    try {
+      const bsrData = await getCatalogItemBSR(product.asin);
+
+      if (bsrData && bsrData.rankings.length > 0) {
+        // Insert all rankings for this product
+        for (const ranking of bsrData.rankings) {
+          const { error } = await supabase.from("bsr_rankings").insert({
+            product_id: product.id,
+            asin: product.asin,
+            category_id: ranking.categoryId,
+            category_name: ranking.categoryName,
+            rank: ranking.rank,
+            recorded_at: new Date().toISOString(),
+          });
+
+          if (error) {
+            errors.push(`BSR保存失敗 ${product.asin} (${ranking.categoryName}): ${error.message}`);
+          } else {
+            recordsProcessed++;
+          }
+        }
+
+        console.log(`[SP-API BSR] ${product.name}: ${bsrData.rankings.map(r => `#${r.rank} in ${r.categoryName}`).join(", ")}`);
+      } else if (bsrData) {
+        errors.push(`${product.asin} (${product.name}): BSRデータ取得成功だがランキング0件`);
+        console.log(`[SP-API BSR] ${product.name}: API returned OK but 0 rankings`);
+      }
+
+      // Rate limit: 1 second between products
+      await bsrSleep(1000);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      errors.push(`BSR取得失敗 ${product.asin}: ${msg}`);
+    }
+  }
+
+  const debugInfo = getListingsReportDebugInfo();
+  console.log(`[SP-API BSR] Synced ${recordsProcessed} BSR records. Report debug: ${debugInfo}`);
+  return {
+    recordsProcessed,
+    errors,
+    debug: {
+      totalProducts: products.length,
+      productsWithAsin: products.filter(p => p.asin).length,
+      ordersFromApi: 0,
+      listingsReportDebug: debugInfo,
+    } as SyncResult["debug"] & { listingsReportDebug: string },
+  };
 }

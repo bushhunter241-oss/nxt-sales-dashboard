@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { syncOrders, syncInventory, syncTraffic } from "@/lib/sync/sp-api-sync";
+import { syncOrders, syncInventory, syncTraffic, syncBSR } from "@/lib/sync/sp-api-sync";
 import {
   startSyncLog,
   completeSyncLog,
@@ -17,11 +17,13 @@ export async function POST(request: NextRequest) {
     const { syncType = "orders", startDate, endDate } = body;
 
     // Determine API type for logging
-    let apiType: "sp-api-orders" | "sp-api-inventory" | "sp-api-traffic";
+    let apiType: "sp-api-orders" | "sp-api-inventory" | "sp-api-traffic" | "sp-api-bsr";
     if (syncType === "inventory") {
       apiType = "sp-api-inventory";
     } else if (syncType === "traffic") {
       apiType = "sp-api-traffic";
+    } else if (syncType === "sp-api-bsr" || syncType === "bsr") {
+      apiType = "sp-api-bsr";
     } else {
       apiType = "sp-api-orders";
     }
@@ -53,6 +55,8 @@ export async function POST(request: NextRequest) {
         result = await syncInventory();
       } else if (syncType === "traffic") {
         result = await syncTraffic(start, end);
+      } else if (syncType === "sp-api-bsr" || syncType === "bsr") {
+        result = await syncBSR();
       } else {
         result = await syncOrders(start, end);
       }

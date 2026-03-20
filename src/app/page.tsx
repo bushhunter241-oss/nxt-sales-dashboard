@@ -11,7 +11,7 @@ import { getAggregatedDailySales, getProductSalesSummary } from "@/lib/api/sales
 import { getAdSummary } from "@/lib/api/advertising";
 import { getProducts } from "@/lib/api/products";
 import { getInventory } from "@/lib/api/inventory";
-import { DollarSign, TrendingUp, ShoppingCart, CreditCard, Truck, Megaphone, Eye, BarChart3, AlertTriangle } from "lucide-react";
+import { DollarSign, ShoppingCart, Megaphone, Eye, AlertTriangle } from "lucide-react";
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
 import { CHART_COLORS } from "@/lib/constants";
 
@@ -42,9 +42,7 @@ export default function DashboardPage() {
   const totalSales = (dailySales as any[]).reduce((sum: number, d: any) => sum + d.sales_amount, 0);
   const totalOrders = (dailySales as any[]).reduce((sum: number, d: any) => sum + d.orders, 0);
   const totalSessions = (dailySales as any[]).reduce((sum: number, d: any) => sum + d.sessions, 0);
-  const avgCvr = totalSessions > 0 ? (totalOrders / totalSessions) * 100 : 0;
   const totalAdSpend = adSummary?.total_ad_spend || 0;
-  const tacos = totalSales > 0 ? (totalAdSpend / totalSales) * 100 : 0;
 
   const lowStockItems = (inventory as any[]).filter((inv: any) => inv.current_stock <= inv.reorder_point);
 
@@ -60,13 +58,11 @@ export default function DashboardPage() {
         <PeriodFilter value={period} onChange={setPeriod} />
       </PageHeader>
 
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6">
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
         <KPICard title="売上合計" value={formatCurrency(totalSales)} icon={DollarSign} />
         <KPICard title="注文件数" value={formatNumber(totalOrders)} icon={ShoppingCart} />
         <KPICard title="セッション" value={formatNumber(totalSessions)} icon={Eye} />
-        <KPICard title="CVR" value={formatPercent(avgCvr)} icon={BarChart3} valueClassName={avgCvr > 5 ? "text-[hsl(var(--success))]" : ""} />
         <KPICard title="広告費" value={formatCurrency(totalAdSpend)} icon={Megaphone} />
-        <KPICard title="TACoS" value={formatPercent(tacos)} icon={TrendingUp} valueClassName={tacos < 10 ? "text-[hsl(var(--success))]" : "text-[hsl(var(--warning))]"} />
       </div>
 
       {lowStockItems.length > 0 && (

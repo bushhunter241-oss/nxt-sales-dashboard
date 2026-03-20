@@ -1,4 +1,5 @@
 "use client";
+// Monthly analysis - updated 2026-03-15
 import { useQuery } from "@tanstack/react-query";
 import { PageHeader } from "@/components/layout/page-header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -25,7 +26,12 @@ export default function MonthlyAnalysisPage() {
     return acc;
   }, {});
 
-  const monthlyData = Object.values(monthly).sort((a: any, b: any) => b.month.localeCompare(a.month));
+  // Filter: only keep last 12 months (exclude old/test data like 2025-01)
+  const now = new Date();
+  const cutoff = `${now.getFullYear() - 1}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const monthlyData = Object.values(monthly)
+    .filter((m: any) => m.month >= cutoff)
+    .sort((a: any, b: any) => b.month.localeCompare(a.month));
   const chartData = [...monthlyData].reverse().slice(-12).map((d: any) => ({
     month: d.month.slice(2),
     売上: d.sales_amount,
@@ -79,7 +85,7 @@ export default function MonthlyAnalysisPage() {
                     <TableCell className="text-right">{formatNumber(m.orders)}</TableCell>
                     <TableCell className="text-right">{formatNumber(m.units_sold)}</TableCell>
                     <TableCell className="text-right">{formatNumber(m.sessions)}</TableCell>
-                    <TableCell className="text-right">{m.sessions > 0 ? formatPercent((m.orders / m.sessions) * 100) : "0%"}</TableCell>
+                    <TableCell className="text-right">{m.sessions > 0 && m.sessions >= m.orders * 0.5 ? formatPercent((m.orders / m.sessions) * 100) : "-"}</TableCell>
                     <TableCell className={`text-right ${momChange >= 0 ? "text-[hsl(var(--success))]" : "text-[hsl(var(--destructive))]"}`}>
                       {prev ? `${momChange >= 0 ? "+" : ""}${momChange.toFixed(1)}%` : "-"}
                     </TableCell>

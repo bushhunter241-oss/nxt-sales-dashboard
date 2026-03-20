@@ -6,9 +6,13 @@ export interface Product {
   sku: string | null;
   selling_price: number;
   cost_price: number;
+  /** Amazon紹介料率（%）。売上に対する割合。例: 15 = 15% */
   fba_fee_rate: number;
+  /** FBA配送手数料（1個あたり固定額、円）。Amazon FBAが実際に請求する配送手数料。 */
+  fba_shipping_fee: number;
   category: string | null;
   product_group: string | null;
+  parent_asin: string | null;
   is_archived: boolean;
   created_at: string;
   updated_at: string;
@@ -85,6 +89,18 @@ export interface MonthlyGoal {
   created_at: string;
 }
 
+export interface BsrRanking {
+  id: string;
+  product_id: string;
+  product_group: string | null;
+  asin: string;
+  category_id: string;
+  category_name: string;
+  rank: number;
+  recorded_at: string;
+  created_at: string;
+}
+
 // Joined/computed types
 export interface DailySalesWithProduct extends DailySales {
   product: Product;
@@ -129,7 +145,7 @@ export interface ApiCredential {
 
 export interface ApiSyncLog {
   id: string;
-  api_type: 'sp-api-orders' | 'sp-api-inventory' | 'ads-api';
+  api_type: 'sp-api-orders' | 'sp-api-inventory' | 'sp-api-traffic' | 'sp-api-bsr' | 'ads-api';
   sync_type: 'manual' | 'cron';
   status: 'pending' | 'running' | 'success' | 'failed';
   start_date: string | null;

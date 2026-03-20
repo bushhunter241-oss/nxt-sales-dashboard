@@ -462,7 +462,7 @@ function SyncControls({
 }: {
   syncStatus: Record<string, SyncStatus>;
   onSync: (
-    type: "sp-api-orders" | "sp-api-inventory" | "ads-api",
+    type: "sp-api-orders" | "sp-api-inventory" | "sp-api-traffic" | "ads-api",
     startDate: string,
     endDate: string
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -479,7 +479,7 @@ function SyncControls({
   const [results, setResults] = useState<Record<string, SyncResultDetail>>({});
 
   const handleSync = async (
-    type: "sp-api-orders" | "sp-api-inventory" | "ads-api"
+    type: "sp-api-orders" | "sp-api-inventory" | "sp-api-traffic" | "ads-api"
   ) => {
     setSyncing((prev) => ({ ...prev, [type]: true }));
     setResults((prev) => {
@@ -546,6 +546,11 @@ function SyncControls({
       type: "sp-api-inventory" as const,
       label: "在庫データ同期",
       desc: "SP-API",
+    },
+    {
+      type: "sp-api-traffic" as const,
+      label: "セッション同期",
+      desc: "SP-API (ビジネスレポート)",
     },
     { type: "ads-api" as const, label: "広告データ同期", desc: "Ads API" },
   ];
@@ -1164,7 +1169,7 @@ export default function ApiIntegrationPage() {
   };
 
   const handleSync = async (
-    type: "sp-api-orders" | "sp-api-inventory" | "ads-api",
+    type: "sp-api-orders" | "sp-api-inventory" | "sp-api-traffic" | "ads-api",
     startDate: string,
     endDate: string
   ) => {
@@ -1176,8 +1181,13 @@ export default function ApiIntegrationPage() {
       body = { startDate, endDate };
     } else {
       url = "/api/sync/sp-api";
+      const syncTypeMap: Record<string, string> = {
+        "sp-api-orders": "orders",
+        "sp-api-inventory": "inventory",
+        "sp-api-traffic": "traffic",
+      };
       body = {
-        syncType: type === "sp-api-inventory" ? "inventory" : "orders",
+        syncType: syncTypeMap[type] || "orders",
         startDate,
         endDate,
       };

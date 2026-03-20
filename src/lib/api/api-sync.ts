@@ -1,7 +1,7 @@
 import { supabase } from "@/lib/supabase";
 import type { ApiSyncLog } from "@/types/database";
 
-type ApiType = "sp-api-orders" | "sp-api-inventory" | "sp-api-traffic" | "ads-api";
+type ApiType = "sp-api-orders" | "sp-api-inventory" | "sp-api-traffic" | "sp-api-bsr" | "ads-api";
 type SyncType = "manual" | "cron";
 
 /**

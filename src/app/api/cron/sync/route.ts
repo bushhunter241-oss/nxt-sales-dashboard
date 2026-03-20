@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { syncOrders, syncInventory, syncTraffic } from "@/lib/sync/sp-api-sync";
+import { syncOrders, syncInventory, syncTraffic, syncBSR } from "@/lib/sync/sp-api-sync";
 import { syncAdvertising } from "@/lib/sync/ads-api-sync";
 import {
   startSyncLog,
@@ -88,6 +88,23 @@ export async function GET(request: Request) {
         const msg = error instanceof Error ? error.message : "Unknown error";
         await failSyncLog(syncId, msg);
         results.push({ type: "sp-api-traffic", success: false, error: msg });
+      }
+    }
+    // 4. BSR Rankings
+    if (!(await isSyncRunning("sp-api-bsr"))) {
+      const syncId = await startSyncLog("sp-api-bsr", "cron");
+      try {
+        const result = await syncBSR();
+        await completeSyncLog(syncId, result.recordsProcessed);
+        results.push({
+          type: "sp-api-bsr",
+          success: true,
+          records: result.recordsProcessed,
+        });
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : "Unknown error";
+        await failSyncLog(syncId, msg);
+        results.push({ type: "sp-api-bsr", success: false, error: msg });
       }
     }
   } else {

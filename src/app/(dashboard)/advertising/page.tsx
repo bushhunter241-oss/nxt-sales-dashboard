@@ -118,7 +118,8 @@ export default function AdvertisingPage() {
                 <TableHead>商品名</TableHead>
                 <TableHead className="text-right">広告費</TableHead>
                 <TableHead className="text-right">広告売上</TableHead>
-                <TableHead className="text-right">ACOS</TableHead>
+                <TableHead className="text-right">ACoS</TableHead>
+                <TableHead className="text-right">TACoS</TableHead>
                 <TableHead className="text-right">ROAS</TableHead>
                 <TableHead className="text-right">クリック</TableHead>
                 <TableHead className="text-right">インプレッション</TableHead>
@@ -128,6 +129,9 @@ export default function AdvertisingPage() {
             <TableBody>
               {productAdData.map((p: any, i: number) => {
                 const acos = p.ad_sales > 0 ? (p.ad_spend / p.ad_sales) * 100 : 0;
+                const prodSales = (productSummary as any[]).find((ps: any) => ps.product?.id === p.product?.id);
+                const prodTotalSales = prodSales?.total_sales || 0;
+                const prodTacos = prodTotalSales > 0 ? (p.ad_spend / prodTotalSales) * 100 : 0;
                 const prodRoas = p.ad_spend > 0 ? p.ad_sales / p.ad_spend : 0;
                 const prodCtr = p.impressions > 0 ? (p.clicks / p.impressions) * 100 : 0;
                 return (
@@ -136,6 +140,7 @@ export default function AdvertisingPage() {
                     <TableCell className="text-right">{formatCurrency(p.ad_spend)}</TableCell>
                     <TableCell className="text-right text-[hsl(var(--primary))]">{formatCurrency(p.ad_sales)}</TableCell>
                     <TableCell className={`text-right ${acos < 30 ? "text-[hsl(var(--success))]" : "text-[hsl(var(--warning))]"}`}>{formatPercent(acos)}</TableCell>
+                    <TableCell className={`text-right ${prodTacos < 10 ? "text-[hsl(var(--success))]" : "text-[hsl(var(--warning))]"}`}>{prodTotalSales > 0 ? formatPercent(prodTacos) : "-"}</TableCell>
                     <TableCell className="text-right">{prodRoas.toFixed(2)}x</TableCell>
                     <TableCell className="text-right">{formatNumber(p.clicks)}</TableCell>
                     <TableCell className="text-right">{formatNumber(p.impressions)}</TableCell>

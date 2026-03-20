@@ -118,18 +118,25 @@ export async function getProductSalesSummary(params: {
   return Object.values(grouped).map((item: any) => {
     const product = item.product;
     const costPrice = product?.cost_price || 0;
+    // fba_fee_rate = Amazon紹介料率（%）例: 15 → 売上の15%
     const fbaFeeRate = product?.fba_fee_rate || 15;
-    const sellingPrice = product?.selling_price || 0;
+    // fba_shipping_fee = FBA配送手数料（1個あたり固定額、円）例: 532
+    const fbaShippingFee = product?.fba_shipping_fee || 0;
     const ad = adByProduct[product?.id] || { ad_spend: 0, ad_sales: 0 };
 
     // Cost calculations
     const totalCost = costPrice * item.total_units;
-    const totalFbaFee = Math.round(item.total_sales * (fbaFeeRate / 100));
+    // 紹介料 = 売上 × 紹介料率（Amazonが売上の%を徴収）
+    const totalReferralFee = Math.round(item.total_sales * (fbaFeeRate / 100));
+    // FBA配送手数料 = 1個あたり固定額 × 販売数量
+    const totalShippingFee = fbaShippingFee * item.total_units;
+    // FBA手数料合計 = 紹介料 + 配送手数料
+    const totalFbaFee = totalReferralFee + totalShippingFee;
     const totalAdSpend = ad.ad_spend;
 
-    // Gross profit = Sales - Cost - FBA Fee
+    // Gross profit = 売上 - 原価 - 紹介料 - FBA配送手数料
     const grossProfit = item.total_sales - totalCost - totalFbaFee;
-    // Net profit = Gross Profit - Ad Spend
+    // Net profit = Gross Profit - 広告費
     const netProfit = grossProfit - totalAdSpend;
     // Profit rate
     const profitRate = item.total_sales > 0 ? (netProfit / item.total_sales) * 100 : 0;
@@ -139,6 +146,8 @@ export async function getProductSalesSummary(params: {
     return {
       ...item,
       total_cost: totalCost,
+      total_referral_fee: totalReferralFee,
+      total_shipping_fee: totalShippingFee,
       total_fba_fee: totalFbaFee,
       total_ad_spend: totalAdSpend,
       total_ad_sales: ad.ad_sales,

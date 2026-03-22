@@ -9,6 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { formatCurrency, formatPercent, formatNumber, getDateRange } from "@/lib/utils";
 import { getDailyAdvertising, getAdSummary } from "@/lib/api/advertising";
 import { getProductSalesSummary } from "@/lib/api/sales";
+import { getMonthlyAdOverrides } from "@/lib/api/amazon-monthly-overrides";
 import { Megaphone, DollarSign, MousePointerClick, TrendingUp, ShoppingCart } from "lucide-react";
 import { Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ComposedChart } from "recharts";
 import { CHART_COLORS } from "@/lib/constants";
@@ -32,12 +33,51 @@ export default function AdvertisingPage() {
     queryFn: () => getProductSalesSummary(dateRange),
   });
 
+  const { data: adOverrides = {} } = useQuery({
+    queryKey: ["monthlyAdOverrides"],
+    queryFn: () => getMonthlyAdOverrides(),
+  });
+
+  // 選択期間内の月を列挙してオーバーライドを適用
+  const getMonthsInRange = (start: string, end: string): string[] => {
+    const months: string[] = [];
+    const d = new Date(start + "T00:00:00");
+    const endD = new Date(end + "T00:00:00");
+    while (d <= endD) {
+      months.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+      d.setMonth(d.getMonth() + 1);
+    }
+    return [...new Set(months)];
+  };
+
+  const monthsInRange = dateRange.startDate && dateRange.endDate
+    ? getMonthsInRange(dateRange.startDate, dateRange.endDate)
+    : [];
+
+  // オーバーライドがある月の合計を計算
+  const overrideAdTotals = monthsInRange.reduce(
+    (acc, ym) => {
+      const ov = (adOverrides as Record<string, any>)[ym];
+      if (ov) {
+        acc.ad_spend += ov.total_ad_spend;
+        acc.ad_sales += ov.total_ad_sales;
+        acc.ad_orders += ov.total_ad_orders;
+        acc.clicks += ov.total_clicks;
+        acc.impressions += ov.total_impressions;
+        acc.hasOverride = true;
+      }
+      return acc;
+    },
+    { ad_spend: 0, ad_sales: 0, ad_orders: 0, clicks: 0, impressions: 0, hasOverride: false }
+  );
+
   const totalSales = (productSummary as any[]).reduce((s: number, p: any) => s + p.total_sales, 0);
-  const totalAdSpend = adSummary?.total_ad_spend || 0;
-  const totalAdSales = adSummary?.total_ad_sales || 0;
-  const totalAdOrders = adSummary?.total_ad_orders || 0;
-  const totalClicks = adSummary?.total_clicks || 0;
-  const totalImpressions = adSummary?.total_impressions || 0;
+  const isAdOverridden = overrideAdTotals.hasOverride;
+  const totalAdSpend = isAdOverridden ? overrideAdTotals.ad_spend : (adSummary?.total_ad_spend || 0);
+  const totalAdSales = isAdOverridden ? overrideAdTotals.ad_sales : (adSummary?.total_ad_sales || 0);
+  const totalAdOrders = isAdOverridden ? overrideAdTotals.ad_orders : (adSummary?.total_ad_orders || 0);
+  const totalClicks = isAdOverridden ? overrideAdTotals.clicks : (adSummary?.total_clicks || 0);
+  const totalImpressions = isAdOverridden ? overrideAdTotals.impressions : (adSummary?.total_impressions || 0);
   const avgAcos = totalAdSales > 0 ? (totalAdSpend / totalAdSales) * 100 : 0;
   const roas = totalAdSpend > 0 ? totalAdSales / totalAdSpend : 0;
   const tacos = totalSales > 0 ? (totalAdSpend / totalSales) * 100 : 0;
@@ -84,6 +124,13 @@ export default function AdvertisingPage() {
       <PageHeader title="広告管理" description="PPC広告の分析">
         <PeriodFilter value={period} onChange={setPeriod} />
       </PageHeader>
+
+      {isAdOverridden && (
+        <div className="mb-4 flex items-center gap-2 text-xs text-yellow-400">
+          <span className="border border-yellow-400/30 rounded px-1">CSV補正</span>
+          月別広告オーバーライドが適用されています
+        </div>
+      )}
 
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4 lg:grid-cols-7">
         <KPICard title="広告費合計" value={formatCurrency(totalAdSpend)} icon={Megaphone} />

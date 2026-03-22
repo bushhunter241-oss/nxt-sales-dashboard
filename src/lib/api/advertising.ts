@@ -77,7 +77,7 @@ export async function getDailyAdSpendByDate(params: {
 export async function upsertDailyAdvertising(ad: Omit<DailyAdvertising, "id" | "created_at">) {
   const { data, error } = await supabase
     .from("daily_advertising")
-    .insert(ad)
+    .upsert(ad, { onConflict: "product_id,date,campaign_type" })
     .select()
     .single();
   if (error) throw error;

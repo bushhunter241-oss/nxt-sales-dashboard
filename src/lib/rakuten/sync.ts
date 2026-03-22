@@ -19,7 +19,10 @@ interface SyncResult {
 
 interface AggEntry {
   product_id: string;
+  parent_product_id: string | null;
+  is_child_sku: boolean;
   product_name: string;
+  sku: string | null;
   date: string;
   orders: number;
   units_sold: number;
@@ -39,8 +42,13 @@ function aggregateOrders(orders: RakutenOrder[]): AggEntry[] {
 
     for (const pkg of order.PackageModelList || []) {
       for (const item of pkg.ItemModelList || []) {
-        const sku = item.SkuModelList?.[0];
-        const productId = sku?.merchantDefinedSkuId || sku?.variantId || item.itemNumber || item.manageNumber || item.itemId || "unknown";
+        const skuModel = item.SkuModelList?.[0];
+        // 子商品SKUを最優先。なければ親商品IDにフォールバック
+        const childSkuId = skuModel?.merchantDefinedSkuId || skuModel?.variantId;
+        const parentProductId = item.manageNumber || item.itemNumber || item.itemId;
+        const productId = childSkuId || parentProductId || "unknown";
+        const isChildSku = !!childSkuId;
+
         const units = item.units || 1;
         const sales = (item.priceTaxIncl || item.price || 0) * units;
 
@@ -53,7 +61,10 @@ function aggregateOrders(orders: RakutenOrder[]): AggEntry[] {
         } else {
           map.set(key, {
             product_id: productId,
+            parent_product_id: isChildSku ? (parentProductId || null) : null,
+            is_child_sku: isChildSku,
             product_name: item.itemName || productId,
+            sku: childSkuId || null,
             date,
             orders: 1,
             units_sold: units,
@@ -74,6 +85,8 @@ async function upsertProducts(entries: AggEntry[]): Promise<number> {
   const seen = new Set<string>();
   const products: Array<{
     product_id: string;
+    sku: string | null;
+    parent_product_id: string | null;
     name: string;
     selling_price: number;
     cost_price: number;
@@ -81,33 +94,56 @@ async function upsertProducts(entries: AggEntry[]): Promise<number> {
   }> = [];
 
   for (const entry of entries) {
-    if (seen.has(entry.product_id)) continue;
-    seen.add(entry.product_id);
+    // 子商品の場合はSKUで、親商品の場合はproduct_idで重複排除
+    const uniqueKey = entry.is_child_sku ? (entry.sku || entry.product_id) : entry.product_id;
+    if (seen.has(uniqueKey)) continue;
+    seen.add(uniqueKey);
 
     // 平均単価を計算
     const avgPrice = entry.units_sold > 0
       ? Math.round(entry.sales_amount / entry.units_sold)
       : 0;
 
-    products.push({
-      product_id: entry.product_id,
-      name: entry.product_name,
-      selling_price: avgPrice,
-      cost_price: 0,
-      fee_rate: 0.1, // デフォルト10%
-    });
+    if (entry.is_child_sku) {
+      // 子商品: product_idは親商品管理番号、skuに子商品SKU
+      products.push({
+        product_id: entry.parent_product_id || entry.product_id,
+        sku: entry.sku,
+        parent_product_id: entry.parent_product_id,
+        name: entry.product_name,
+        selling_price: avgPrice,
+        cost_price: 0,
+        fee_rate: 10,  // 楽天手数料率 10%
+      });
+    } else {
+      // 親商品
+      products.push({
+        product_id: entry.product_id,
+        sku: null,
+        parent_product_id: null,
+        name: entry.product_name,
+        selling_price: avgPrice,
+        cost_price: 0,
+        fee_rate: 10,  // 楽天手数料率 10%
+      });
+    }
   }
 
   if (products.length === 0) return 0;
 
-  // 既存商品をチェックして新規のみ追加
+  // 既存商品をチェック（product_id + sku の組み合わせで判定）
   const { data: existing } = await supabase
     .from("rakuten_products")
-    .select("product_id")
-    .in("product_id", products.map(p => p.product_id));
+    .select("product_id, sku");
 
-  const existingIds = new Set((existing || []).map(p => p.product_id));
-  const newProducts = products.filter(p => !existingIds.has(p.product_id));
+  const existingKeys = new Set(
+    (existing || []).map(p => p.sku ? `${p.product_id}::${p.sku}` : p.product_id)
+  );
+
+  const newProducts = products.filter(p => {
+    const key = p.sku ? `${p.product_id}::${p.sku}` : p.product_id;
+    return !existingKeys.has(key);
+  });
 
   if (newProducts.length > 0) {
     const { error } = await supabase
@@ -125,16 +161,37 @@ async function upsertProducts(entries: AggEntry[]): Promise<number> {
  * 日別売上データをupsert
  */
 async function upsertDailySales(entries: AggEntry[]): Promise<number> {
-  // product_id → UUID のマッピング取得
+  // product_id → UUID のマッピング取得（SKUと親product_id両方で検索）
   const productIds = [...new Set(entries.map(e => e.product_id))];
+  const skuIds = [...new Set(entries.filter(e => e.sku).map(e => e.sku!))];
+  const parentIds = [...new Set(entries.filter(e => e.parent_product_id).map(e => e.parent_product_id!))];
+  const allProductIds = [...new Set([...productIds, ...parentIds])];
+
   const { data: products } = await supabase
     .from("rakuten_products")
-    .select("id, product_id")
-    .in("product_id", productIds);
+    .select("id, product_id, sku")
+    .in("product_id", allProductIds);
 
-  const idMap = new Map<string, string>();
+  // SKUでのマッピング（子商品用）
+  const skuMap = new Map<string, string>();
+  // product_idでのマッピング（親商品用フォールバック）
+  const productIdMap = new Map<string, string>();
   for (const p of products || []) {
-    idMap.set(p.product_id, p.id);
+    if (p.sku) skuMap.set(p.sku, p.id);
+    if (!p.sku) productIdMap.set(p.product_id, p.id);
+  }
+
+  // エントリーのproduct_id(SKU名) → DB UUID のマッピング
+  const idMap = new Map<string, string>();
+  for (const entry of entries) {
+    if (entry.is_child_sku && entry.sku) {
+      // SKUで検索を優先
+      const uuid = skuMap.get(entry.sku) || productIdMap.get(entry.parent_product_id || entry.product_id);
+      if (uuid) idMap.set(entry.product_id, uuid);
+    } else {
+      const uuid = productIdMap.get(entry.product_id);
+      if (uuid) idMap.set(entry.product_id, uuid);
+    }
   }
 
   let upserted = 0;

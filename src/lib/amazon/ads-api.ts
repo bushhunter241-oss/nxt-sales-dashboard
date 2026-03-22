@@ -138,6 +138,7 @@ export interface AdsReportRow {
   orders7d?: number;
   orders14d?: number;
   purchases7d?: number;
+  purchases14d?: number;
 }
 
 /**
@@ -204,7 +205,9 @@ export async function requestSpProductReport(
         "clicks",
         "cost",
         "purchases7d",
+        "purchases14d",
         "sales7d",
+        "sales14d",
       ],
       reportTypeId: "spAdvertisedProduct",
       timeUnit: "DAILY",

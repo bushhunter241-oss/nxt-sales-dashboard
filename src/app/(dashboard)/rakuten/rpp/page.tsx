@@ -131,6 +131,7 @@ export default function RakutenRppPage() {
                 <TableHead className="text-right">ACoS</TableHead>
                 <TableHead className="text-right">TACoS</TableHead>
                 <TableHead className="text-right">クリック</TableHead>
+                <TableHead className="text-right">インプレッション</TableHead>
                 <TableHead className="text-right">CTR</TableHead>
                 <TableHead className="text-right">広告CVR</TableHead>
               </TableRow>
@@ -145,15 +146,17 @@ export default function RakutenRppPage() {
                 const grpTacos = grpTotalSales > 0 ? (g.ad_spend / grpTotalSales) * 100 : 0;
                 const grpCtr = g.impressions > 0 ? (g.clicks / g.impressions) * 100 : 0;
                 const grpCvr = g.clicks > 0 && g.ad_orders > 0 ? (g.ad_orders / g.clicks) * 100 : 0;
+                const acosColor = acos === 0 ? "" : acos < 20 ? "text-[hsl(var(--success))]" : acos <= 40 ? "text-[hsl(var(--warning))]" : "text-[hsl(var(--destructive))]";
                 return (
                   <TableRow key={i}>
                     <TableCell className="font-medium">{g.group}</TableCell>
                     <TableCell className="text-right">{formatCurrency(g.ad_spend)}</TableCell>
                     <TableCell className="text-right text-[hsl(var(--primary))]">{formatCurrency(g.ad_sales)}</TableCell>
                     <TableCell className={`text-right ${grpRoas > 300 ? "text-[hsl(var(--success))]" : ""}`}>{formatPercent(grpRoas)}</TableCell>
-                    <TableCell className={`text-right ${acos < 30 ? "text-[hsl(var(--success))]" : "text-[hsl(var(--warning))]"}`}>{formatPercent(acos)}</TableCell>
+                    <TableCell className={`text-right ${acosColor}`}>{formatPercent(acos)}</TableCell>
                     <TableCell className={`text-right ${grpTacos < 10 ? "text-[hsl(var(--success))]" : "text-[hsl(var(--warning))]"}`}>{grpTotalSales > 0 ? formatPercent(grpTacos) : "-"}</TableCell>
                     <TableCell className="text-right">{formatNumber(g.clicks)}</TableCell>
+                    <TableCell className="text-right">{formatNumber(g.impressions)}</TableCell>
                     <TableCell className="text-right">{formatPercent(grpCtr)}</TableCell>
                     <TableCell className="text-right">{g.ad_orders > 0 ? formatPercent(grpCvr) : "-"}</TableCell>
                   </TableRow>

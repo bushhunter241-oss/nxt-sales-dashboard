@@ -117,3 +117,103 @@ export async function getMonthlyOverrides(): Promise<Record<string, MonthlyOverr
   }
   return map;
 }
+
+/** 広告レポートCSVテキストを MonthlyAdOverride[] に変換 */
+export function parseMonthlyAdSummaryCsv(csvText: string): MonthlyAdOverride[] {
+  const lines = csvText.split("\n").filter(l => l.trim());
+  if (lines.length < 2) return [];
+
+  // BOMを除去
+  const header = lines[0].replace(/^\uFEFF/, "");
+  const cols = header.split(",");
+
+  const idx = {
+    date: cols.findIndex(c => c.includes("日付") || c.includes("Date")),
+    spend: cols.findIndex(c => c.includes("費用") || c.includes("Spend")),
+    sales: cols.findIndex(c => c.includes("売上") || c.includes("Sales")),
+    orders: cols.findIndex(c => c.includes("注文") || c.includes("Orders")),
+    impressions: cols.findIndex(c => c.includes("インプレッション") || c.includes("Impressions")),
+    clicks: cols.findIndex(c => c.includes("クリック") || c.includes("Clicks")),
+  };
+
+  // 月別に集計するためのマップ
+  const monthMap: Record<string, MonthlyAdOverride> = {};
+
+  for (let i = 1; i < lines.length; i++) {
+    const row = parseCSVLine(lines[i]);
+    const dateRaw = row[idx.date]?.replace(/"/g, "");
+    if (!dateRaw) continue;
+
+    // 日付: "2026/01/01" or "2026-01-01" → "2026-01"
+    const dateParts = dateRaw.split(/[\/\-]/);
+    if (dateParts.length < 2) continue;
+    const year_month = `${dateParts[0]}-${dateParts[1].padStart(2, "0")}`;
+
+    if (!monthMap[year_month]) {
+      monthMap[year_month] = {
+        year_month,
+        total_ad_spend: 0,
+        total_ad_sales: 0,
+        total_ad_orders: 0,
+        total_impressions: 0,
+        total_clicks: 0,
+      };
+    }
+
+    const m = monthMap[year_month];
+    m.total_ad_spend += parseMoney(row[idx.spend] || "0");
+    m.total_ad_sales += parseMoney(row[idx.sales] || "0");
+    m.total_ad_orders += parseCount(row[idx.orders] || "0");
+    m.total_impressions += parseCount(row[idx.impressions] || "0");
+    m.total_clicks += parseCount(row[idx.clicks] || "0");
+  }
+
+  return Object.values(monthMap);
+}
+
+// ── 月別広告費オーバーライド ──────────────────────────
+
+export interface MonthlyAdOverride {
+  year_month: string;   // 'YYYY-MM'
+  total_ad_spend: number;
+  total_ad_sales: number;
+  total_ad_orders: number;
+  total_impressions: number;
+  total_clicks: number;
+}
+
+/** MonthlyAdOverride[] をSupabaseにupsertする */
+export async function upsertMonthlyAdOverrides(overrides: MonthlyAdOverride[]): Promise<{ saved: number; errors: string[] }> {
+  const errors: string[] = [];
+  let saved = 0;
+
+  for (const o of overrides) {
+    const { error } = await supabase
+      .from("amazon_monthly_ad_overrides")
+      .upsert(
+        { ...o, source: "csv", imported_at: new Date().toISOString() },
+        { onConflict: "year_month" }
+      );
+    if (error) {
+      errors.push(`${o.year_month}: ${error.message}`);
+    } else {
+      saved++;
+    }
+  }
+
+  return { saved, errors };
+}
+
+/** 月別広告費オーバーライドを全件取得 */
+export async function getMonthlyAdOverrides(): Promise<Record<string, MonthlyAdOverride>> {
+  const { data } = await supabase
+    .from("amazon_monthly_ad_overrides")
+    .select("*")
+    .order("year_month", { ascending: false });
+
+  const map: Record<string, MonthlyAdOverride> = {};
+  for (const row of data || []) {
+    map[row.year_month] = row;
+  }
+  return map;
+}

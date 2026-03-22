@@ -115,13 +115,15 @@ export async function GET(request: Request) {
     });
   }
 
-  // --- Ads API Sync ---
+  // --- Ads API Sync (過去3日分を同期して歯抜け防止) ---
   const adsCreds = await getCredentials("ads-api");
+  const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+  const adsStartDate = threeDaysAgo.toISOString().split("T")[0];
   if (adsCreds) {
     if (!(await isSyncRunning("ads-api"))) {
-      const syncId = await startSyncLog("ads-api", "cron", dateStr, dateStr);
+      const syncId = await startSyncLog("ads-api", "cron", adsStartDate, dateStr);
       try {
-        const result = await syncAdvertising(dateStr, dateStr);
+        const result = await syncAdvertising(adsStartDate, dateStr);
         await completeSyncLog(syncId, result.recordsProcessed);
         results.push({
           type: "ads-api",

@@ -85,7 +85,7 @@ export async function processAdsReportData(
 
     existing.ad_spend += Math.round(row.cost || 0);
     existing.ad_sales += Math.round(row.sales14d || row.sales7d || 0);
-    existing.ad_orders += row.purchases7d || row.orders7d || row.orders14d || 0;
+    existing.ad_orders += row.purchases14d || row.purchases7d || row.orders14d || row.orders7d || 0;
     existing.impressions += row.impressions || 0;
     existing.clicks += row.clicks || 0;
 
@@ -100,51 +100,18 @@ export async function processAdsReportData(
     aggregateMap.set(key, existing);
   }
 
-  // 3. Upsert to daily_advertising
+  // 3. Upsert to daily_advertising (uses UNIQUE constraint on product_id, date, campaign_type)
   const records = Array.from(aggregateMap.values());
 
   for (const record of records) {
-    // Check if a record from ads-api already exists for this date+product
-    const { data: existingRecord } = await supabase
+    const { error } = await supabase
       .from("daily_advertising")
-      .select("id")
-      .eq("product_id", record.product_id)
-      .eq("date", record.date)
-      .eq("source", "ads-api")
-      .maybeSingle();
+      .upsert(record, { onConflict: "product_id,date,campaign_type" });
 
-    if (existingRecord) {
-      // Update existing
-      const { error } = await supabase
-        .from("daily_advertising")
-        .update({
-          ad_spend: record.ad_spend,
-          ad_sales: record.ad_sales,
-          ad_orders: record.ad_orders,
-          impressions: record.impressions,
-          clicks: record.clicks,
-          acos: record.acos,
-          roas: record.roas,
-          campaign_name: record.campaign_name,
-        })
-        .eq("id", existingRecord.id);
-
-      if (error) {
-        errors.push(`Failed to update ad data for ${record.date}: ${error.message}`);
-      } else {
-        recordsProcessed++;
-      }
+    if (error) {
+      errors.push(`Failed to upsert ad data for ${record.date}: ${error.message}`);
     } else {
-      // Insert new
-      const { error } = await supabase
-        .from("daily_advertising")
-        .insert(record);
-
-      if (error) {
-        errors.push(`Failed to insert ad data for ${record.date}: ${error.message}`);
-      } else {
-        recordsProcessed++;
-      }
+      recordsProcessed++;
     }
   }
 

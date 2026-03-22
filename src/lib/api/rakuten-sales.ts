@@ -124,6 +124,26 @@ export async function updateRakutenAccessData(params: {
   }
 }
 
+/** 子商品で原価未設定の場合、親商品の原価にフォールバック */
+function getEffectiveCostPrice(product: any, parentProductMap: Map<string, any>): number {
+  if (product?.cost_price > 0) return product.cost_price;
+  if (product?.parent_product_id) {
+    const parent = parentProductMap.get(product.parent_product_id);
+    if (parent && parent.cost_price > 0) return parent.cost_price;
+  }
+  return 0;
+}
+
+/** 子商品で送料未設定の場合、親商品の送料にフォールバック */
+function getEffectiveShippingFee(product: any, parentProductMap: Map<string, any>): number {
+  if (product?.shipping_fee > 0) return product.shipping_fee;
+  if (product?.parent_product_id) {
+    const parent = parentProductMap.get(product.parent_product_id);
+    if (parent && parent.shipping_fee > 0) return parent.shipping_fee;
+  }
+  return 0;
+}
+
 export async function getRakutenProductSalesSummary(params: {
   startDate?: string;
   endDate?: string;
@@ -137,6 +157,18 @@ export async function getRakutenProductSalesSummary(params: {
 
   const { data, error } = await query;
   if (error) { console.warn("getRakutenProductSalesSummary error:", error); return []; }
+
+  // 親商品マップを作成（原価・送料フォールバック用）
+  const { data: allProducts } = await supabase
+    .from("rakuten_products")
+    .select("*")
+    .eq("is_archived", false);
+
+  const parentProductMap = new Map<string, any>(
+    (allProducts || [])
+      .filter(p => !p.parent_product_id)
+      .map(p => [p.product_id, p])
+  );
 
   // Fetch Rakuten advertising data
   let adQuery = supabase
@@ -177,15 +209,17 @@ export async function getRakutenProductSalesSummary(params: {
 
   return Object.values(grouped).map((item: any) => {
     const product = item.product;
-    const costPrice = product?.cost_price || 0;
+    const costPrice = getEffectiveCostPrice(product, parentProductMap);
+    const shippingFee = getEffectiveShippingFee(product, parentProductMap);
     const feeRate = product?.fee_rate || 10;
     const ad = adByProduct[product?.id] || { ad_spend: 0, ad_sales: 0 };
 
     const totalCost = costPrice * item.total_units;
+    const totalShipping = shippingFee * item.total_units;
     const totalFee = Math.round(item.total_sales * (feeRate / 100));
     const totalAdSpend = ad.ad_spend;
 
-    const grossProfit = item.total_sales - totalCost - totalFee;
+    const grossProfit = item.total_sales - totalCost - totalShipping - totalFee;
     const netProfit = grossProfit - totalAdSpend;
     const profitRate = item.total_sales > 0 ? (netProfit / item.total_sales) * 100 : 0;
     const unitProfit = item.total_units > 0 ? Math.round(netProfit / item.total_units) : 0;
@@ -193,6 +227,7 @@ export async function getRakutenProductSalesSummary(params: {
     return {
       ...item,
       total_cost: totalCost,
+      total_shipping: totalShipping,
       total_fee: totalFee,
       total_ad_spend: totalAdSpend,
       total_ad_sales: ad.ad_sales,
@@ -202,6 +237,56 @@ export async function getRakutenProductSalesSummary(params: {
       unit_profit: unitProfit,
     };
   });
+}
+
+/**
+ * RMS売上CSVをインポートして rakuten_daily_sales を更新する。
+ * RPC関数 upsert_rakuten_sales を使い、既存の access_count/cvr を保持する。
+ */
+export async function importRakutenSalesCSV(
+  csvData: Array<{
+    productNumber: string;
+    salesAmount: number;
+    orders: number;
+    unitsSold: number;
+    date: string;
+  }>
+): Promise<{ success: boolean; upserted: number; errors: string[] }> {
+  const errors: string[] = [];
+  let upserted = 0;
+
+  for (const row of csvData) {
+    // 商品管理番号 → rakuten_products で検索（product_id or sku）
+    const { data: product } = await supabase
+      .from("rakuten_products")
+      .select("id")
+      .or(`product_id.eq.${row.productNumber},sku.eq.${row.productNumber}`)
+      .limit(1)
+      .maybeSingle();
+
+    if (!product) {
+      errors.push(`商品 ${row.productNumber} がマスタに見つかりません`);
+      continue;
+    }
+
+    // RPC関数で売上のみ更新（access_count/cvrは保持）
+    const { error } = await supabase.rpc("upsert_rakuten_sales", {
+      p_product_id: product.id,
+      p_date: row.date,
+      p_sales_amount: row.salesAmount,
+      p_orders: row.orders,
+      p_units_sold: row.unitsSold,
+      p_source: "csv",
+    });
+
+    if (error) {
+      errors.push(`${row.productNumber} (${row.date}): ${error.message}`);
+    } else {
+      upserted++;
+    }
+  }
+
+  return { success: errors.length === 0, upserted, errors };
 }
 
 export async function getRakutenProducts(includeArchived = false) {

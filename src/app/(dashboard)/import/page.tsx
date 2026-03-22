@@ -9,12 +9,12 @@ import { getProducts } from "@/lib/api/products";
 import { getRakutenProducts } from "@/lib/api/rakuten-products";
 import { upsertDailySales } from "@/lib/api/sales";
 import { upsertDailyAdvertising } from "@/lib/api/advertising";
-import { updateRakutenAccessData } from "@/lib/api/rakuten-sales";
-import { parseMonthlySummaryCsv, upsertMonthlyOverrides } from "@/lib/api/amazon-monthly-overrides";
+import { updateRakutenAccessData, importRakutenSalesCSV } from "@/lib/api/rakuten-sales";
+import { parseMonthlySummaryCsv, upsertMonthlyOverrides, parseMonthlyAdSummaryCsv, upsertMonthlyAdOverrides } from "@/lib/api/amazon-monthly-overrides";
 import { Upload, CheckCircle2, AlertCircle } from "lucide-react";
 import Papa from "papaparse";
 
-type ImportType = "business" | "advertising" | "rakuten_access" | "monthly_summary";
+type ImportType = "business" | "advertising" | "rakuten_access" | "rakuten_sales" | "monthly_summary" | "monthly_ad_summary";
 
 export default function ImportPage() {
   const [importType, setImportType] = useState<ImportType>("business");
@@ -71,6 +71,7 @@ export default function ImportPage() {
             units_sold: parseInt(row["注文された商品点数"] || row["units_ordered"] || "0") || 0,
             cvr: parseFloat(row["セッションのパーセンテージ - 注文商品点数"] || "0") || 0,
             cancellations: 0,
+            source: "csv",
           });
           imported++;
         }
@@ -92,6 +93,7 @@ export default function ImportPage() {
             roas: parseFloat(row["ROAS"] || "0") || 0,
             campaign_name: row["キャンペーン名"] || row["Campaign Name"] || null,
             campaign_type: "sp",
+            source: "csv",
           });
           imported++;
         }
@@ -101,6 +103,46 @@ export default function ImportPage() {
         imported = result.saved;
         if (result.errors.length > 0) {
           throw new Error(result.errors.join(", "));
+        }
+      } else if (importType === "monthly_ad_summary") {
+        const overrides = parseMonthlyAdSummaryCsv(text);
+        const result = await upsertMonthlyAdOverrides(overrides);
+        imported = result.saved;
+        if (result.errors.length > 0) {
+          throw new Error(result.errors.join(", "));
+        }
+      } else if (importType === "rakuten_sales") {
+        // 楽天売上CSV（日別）
+        const csvData: Array<{ productNumber: string; salesAmount: number; orders: number; unitsSold: number; date: string }> = [];
+        for (const row of rows as any[]) {
+          const productNumber = row["商品管理番号"] || row["商品番号"] || row["product_id"] || "";
+          if (!productNumber) { skipped++; continue; }
+
+          const salesAmount = Math.round(parseFloat(
+            (row["売上"] || row["売上金額"] || row["売上額"] || row["sales"] || "0").toString().replace(/[,￥¥]/g, "")
+          ) || 0);
+          const orders = parseInt(
+            (row["売上件数"] || row["注文数"] || row["注文件数"] || row["orders"] || "0").toString().replace(/,/g, "")
+          ) || 0;
+          const unitsSold = parseInt(
+            (row["売上個数"] || row["販売個数"] || row["units"] || "0").toString().replace(/,/g, "")
+          ) || 0;
+          const date = row["日付"] || row["date"] || row["期間"] || reportDate;
+          // 日付フォーマット正規化: "2026/01/01" → "2026-01-01"
+          const normalizedDate = date.replace(/\//g, "-");
+
+          if (salesAmount === 0 && orders === 0 && unitsSold === 0) { skipped++; continue; }
+
+          csvData.push({ productNumber, salesAmount, orders, unitsSold, date: normalizedDate });
+        }
+
+        if (csvData.length > 0) {
+          const result = await importRakutenSalesCSV(csvData);
+          imported = result.upserted;
+          if (result.errors.length > 0) {
+            skipped += result.errors.length;
+            console.warn("楽天売上CSVインポートエラー:", result.errors);
+          }
         }
       } else if (importType === "rakuten_access") {
         // 楽天アクセス・売上CSV
@@ -149,7 +191,9 @@ export default function ImportPage() {
     business: "ビジネスレポート",
     advertising: "広告レポート",
     rakuten_access: "楽天アクセス・売上",
+    rakuten_sales: "楽天売上CSV",
     monthly_summary: "月別サマリー",
+    monthly_ad_summary: "月別広告サマリー",
   };
 
   return (
@@ -166,8 +210,14 @@ export default function ImportPage() {
         <Button variant={importType === "rakuten_access" ? "default" : "outline"} onClick={() => setImportType("rakuten_access")}>
           🔴 楽天アクセス・売上
         </Button>
+        <Button variant={importType === "rakuten_sales" ? "default" : "outline"} onClick={() => setImportType("rakuten_sales")}>
+          🔴 楽天売上CSV
+        </Button>
         <Button variant={importType === "monthly_summary" ? "default" : "outline"} onClick={() => setImportType("monthly_summary")}>
           🟠 月別サマリー
+        </Button>
+        <Button variant={importType === "monthly_ad_summary" ? "default" : "outline"} onClick={() => setImportType("monthly_ad_summary")}>
+          🟠 月別広告サマリー
         </Button>
       </div>
 
@@ -223,6 +273,26 @@ export default function ImportPage() {
                   <p className="text-xs">「表示」を「月別」にして対象期間を選択し、CSVダウンロード</p>
                   <p className="text-xs text-yellow-400">
                     ※ 取り込んだ月別合計が、月別分析ページの売上合計に優先表示されます
+                  </p>
+                </div>
+              )}
+              {importType === "monthly_ad_summary" && (
+                <div className="space-y-1">
+                  <p>セラーセントラル → 広告 → 広告レポート → スポンサープロダクト（日別）</p>
+                  <p className="text-xs">日別の広告レポートCSVをアップロードすると、月別に自動集計して保存します</p>
+                  <p className="text-xs">必要な列: 日付、費用、売上（7日間の総売上高）、注文数、インプレッション、クリック</p>
+                  <p className="text-xs text-yellow-400">
+                    ※ 取り込んだ月別広告費合計が、月別分析ページの広告費に優先表示されます
+                  </p>
+                </div>
+              )}
+              {importType === "rakuten_sales" && (
+                <div className="space-y-1">
+                  <p>楽天RMS → データダウンロード → 売上データ → 日別</p>
+                  <p className="text-xs">必要な列: <strong>商品管理番号</strong>（または商品番号）、<strong>売上</strong>（売上金額）、<strong>売上件数</strong>、<strong>売上個数</strong>、<strong>日付</strong></p>
+                  <p className="text-xs">日付列がない場合は、上部の「レポート日付」が全行に適用されます</p>
+                  <p className="text-xs text-yellow-400">
+                    ※ 既存のアクセスデータ（アクセス数・CVR）は上書きされません。売上・注文数・販売個数のみ更新されます
                   </p>
                 </div>
               )}

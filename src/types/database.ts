@@ -38,6 +38,7 @@ export interface DailyAdvertising {
   date: string;
   ad_spend: number;
   ad_sales: number;
+  ad_orders: number;
   impressions: number;
   clicks: number;
   acos: number;
@@ -82,10 +83,12 @@ export interface InventoryLog {
 export interface MonthlyGoal {
   id: string;
   product_id: string | null;
+  product_group: string | null;
   year_month: string;
   target_sales: number;
   target_orders: number;
   target_profit: number;
+  target_ad_budget: number;
   created_at: string;
 }
 
@@ -98,6 +101,15 @@ export interface BsrRanking {
   category_name: string;
   rank: number;
   recorded_at: string;
+  created_at: string;
+}
+
+export interface ProductEvent {
+  id: string;
+  date: string;
+  product_group: string;
+  event_type: string;
+  memo: string;
   created_at: string;
 }
 
@@ -166,6 +178,8 @@ export interface RakutenProduct {
   selling_price: number;
   cost_price: number;
   fee_rate: number; // 楽天手数料率(%)
+  shipping_fee: number; // 1個あたり配送コスト（円）
+  parent_product_id: string | null; // 親商品の商品管理番号（NULLなら親商品）
   category: string | null;
   product_group: string | null;
   is_archived: boolean;

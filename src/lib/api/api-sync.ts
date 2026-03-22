@@ -1,8 +1,13 @@
-import { supabase } from "@/lib/supabase";
+import { supabase, getSupabaseAdmin } from "@/lib/supabase";
 import type { ApiSyncLog } from "@/types/database";
 
 type ApiType = "sp-api-orders" | "sp-api-inventory" | "sp-api-traffic" | "sp-api-bsr" | "ads-api";
 type SyncType = "manual" | "cron";
+
+/** Use admin client for write operations (bypasses RLS), anon for reads */
+function getDb() {
+  try { return getSupabaseAdmin(); } catch { return supabase; }
+}
 
 /**
  * Create a new sync log entry (status: running)
@@ -13,7 +18,7 @@ export async function startSyncLog(
   startDate?: string,
   endDate?: string
 ): Promise<string> {
-  const { data, error } = await supabase
+  const { data, error } = await getDb()
     .from("api_sync_logs")
     .insert({
       api_type: apiType,
@@ -40,7 +45,7 @@ export async function completeSyncLog(
   syncId: string,
   recordsProcessed: number
 ): Promise<void> {
-  await supabase
+  await getDb()
     .from("api_sync_logs")
     .update({
       status: "success",
@@ -58,7 +63,7 @@ export async function failSyncLog(
   errorMessage: string,
   recordsProcessed: number = 0
 ): Promise<void> {
-  await supabase
+  await getDb()
     .from("api_sync_logs")
     .update({
       status: "failed",
@@ -135,7 +140,7 @@ export async function isSyncRunning(apiType: ApiType): Promise<boolean> {
 
   if (now - startedAt > tenMinutes) {
     // Mark stale sync as failed
-    await supabase
+    await getDb()
       .from("api_sync_logs")
       .update({
         status: "failed",

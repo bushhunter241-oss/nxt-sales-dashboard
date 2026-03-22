@@ -1,19 +1,20 @@
 "use client";
 import { useState, useCallback } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Select } from "@/components/ui/select";
-import { Badge } from "@/components/ui/badge";
 import { getProducts } from "@/lib/api/products";
+import { getRakutenProducts } from "@/lib/api/rakuten-products";
 import { upsertDailySales } from "@/lib/api/sales";
 import { upsertDailyAdvertising } from "@/lib/api/advertising";
+import { updateRakutenAccessData } from "@/lib/api/rakuten-sales";
+import { parseMonthlySummaryCsv, upsertMonthlyOverrides } from "@/lib/api/amazon-monthly-overrides";
 import { Upload, CheckCircle2, AlertCircle } from "lucide-react";
 import Papa from "papaparse";
 
-type ImportType = "business" | "advertising";
+type ImportType = "business" | "advertising" | "rakuten_access" | "monthly_summary";
 
 export default function ImportPage() {
   const [importType, setImportType] = useState<ImportType>("business");
@@ -26,6 +27,11 @@ export default function ImportPage() {
   const { data: products = [] } = useQuery({
     queryKey: ["products"],
     queryFn: () => getProducts(),
+  });
+
+  const { data: rakutenProducts = [] } = useQuery({
+    queryKey: ["rakutenProductsAll"],
+    queryFn: () => getRakutenProducts(true),
   });
 
   const handleFileDrop = useCallback((e: React.DragEvent) => {
@@ -48,13 +54,14 @@ export default function ImportPage() {
       const text = await file.text();
       const { data: rows } = Papa.parse(text, { header: true, skipEmptyLines: true });
       let imported = 0;
+      let skipped = 0;
 
       if (importType === "business") {
         for (const row of rows as any[]) {
           const asin = row["(子)ASIN"] || row["ASIN"] || row["asin"] || "";
           const product = (products as any[]).find((p: any) => p.asin === asin);
           if (!product) continue;
-          
+
           await upsertDailySales({
             product_id: product.id,
             date: reportDate,
@@ -67,7 +74,7 @@ export default function ImportPage() {
           });
           imported++;
         }
-      } else {
+      } else if (importType === "advertising") {
         for (const row of rows as any[]) {
           const asin = row["広告された ASIN"] || row["Advertised ASIN"] || "";
           const product = (products as any[]).find((p: any) => p.asin === asin);
@@ -78,6 +85,7 @@ export default function ImportPage() {
             date: row["日付"] || row["Date"] || reportDate,
             ad_spend: Math.round(parseFloat(row["費用"] || row["Spend"] || "0") || 0),
             ad_sales: Math.round(parseFloat(row["7日間の総売上高"] || row["7 Day Total Sales"] || "0") || 0),
+            ad_orders: parseInt(row["7日間の総注文数"] || row["7 Day Total Orders"] || row["注文数"] || "0") || 0,
             impressions: parseInt(row["インプレッション"] || row["Impressions"] || "0") || 0,
             clicks: parseInt(row["クリック"] || row["Clicks"] || "0") || 0,
             acos: parseFloat(row["ACOS"] || "0") || 0,
@@ -87,10 +95,48 @@ export default function ImportPage() {
           });
           imported++;
         }
+      } else if (importType === "monthly_summary") {
+        const overrides = parseMonthlySummaryCsv(text);
+        const result = await upsertMonthlyOverrides(overrides);
+        imported = result.saved;
+        if (result.errors.length > 0) {
+          throw new Error(result.errors.join(", "));
+        }
+      } else if (importType === "rakuten_access") {
+        // 楽天アクセス・売上CSV
+        for (const row of rows as any[]) {
+          // 商品番号 or 商品管理番号 で楽天商品を検索
+          const productNumber = row["商品番号"] || row["商品管理番号"] || row["商品URL"] || "";
+          if (!productNumber) { skipped++; continue; }
+
+          // product_id (商品管理番号) で検索
+          const rktProduct = (rakutenProducts as any[]).find((p: any) =>
+            p.product_id === productNumber || p.sku === productNumber
+          );
+          if (!rktProduct) { skipped++; continue; }
+
+          const accessCount = parseInt(row["アクセス人数"] || row["アクセス数"] || row["PV数"] || "0") || 0;
+          const cvrRaw = row["転換率"] || row["CVR"] || row["転換率(%)"] || "0";
+          const cvr = parseFloat(cvrRaw.replace("%", "")) || 0;
+
+          // CSVに日付列がある場合はそれを使用、なければ指定日付
+          const date = row["日付"] || row["対象日"] || row["集計日"] || reportDate;
+
+          await updateRakutenAccessData({
+            productId: rktProduct.id,
+            date,
+            accessCount,
+            cvr,
+          });
+          imported++;
+        }
       }
 
       queryClient.invalidateQueries();
-      setStatus({ type: "success", message: `${imported}件のデータをインポートしました` });
+      const msg = skipped > 0
+        ? `${imported}件インポート完了（${skipped}件スキップ: 商品が見つからず）`
+        : `${imported}件のデータをインポートしました`;
+      setStatus({ type: "success", message: msg });
       setFile(null);
     } catch (err: any) {
       setStatus({ type: "error", message: `エラー: ${err.message}` });
@@ -99,23 +145,40 @@ export default function ImportPage() {
     }
   };
 
+  const typeLabels: Record<ImportType, string> = {
+    business: "ビジネスレポート",
+    advertising: "広告レポート",
+    rakuten_access: "楽天アクセス・売上",
+    monthly_summary: "月別サマリー",
+  };
+
   return (
     <div>
-      <PageHeader title="CSVインポート" description="AmazonセラーセントラルからダウンロードしたCSVファイルをインポートします" />
+      <PageHeader title="CSVインポート" description="Amazon・楽天のレポートCSVファイルをインポートします" />
 
       <div className="flex gap-2 mb-6">
-        <Button variant={importType === "business" ? "default" : "outline"} onClick={() => setImportType("business")}>ビジネスレポート</Button>
-        <Button variant={importType === "advertising" ? "default" : "outline"} onClick={() => setImportType("advertising")}>広告レポート</Button>
+        <Button variant={importType === "business" ? "default" : "outline"} onClick={() => setImportType("business")}>
+          🟠 ビジネスレポート
+        </Button>
+        <Button variant={importType === "advertising" ? "default" : "outline"} onClick={() => setImportType("advertising")}>
+          🟠 広告レポート
+        </Button>
+        <Button variant={importType === "rakuten_access" ? "default" : "outline"} onClick={() => setImportType("rakuten_access")}>
+          🔴 楽天アクセス・売上
+        </Button>
+        <Button variant={importType === "monthly_summary" ? "default" : "outline"} onClick={() => setImportType("monthly_summary")}>
+          🟠 月別サマリー
+        </Button>
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle>{importType === "business" ? "ビジネスレポート" : "広告レポート"}のインポート</CardTitle>
+          <CardTitle>{typeLabels[importType]}のインポート</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex items-center gap-4">
             <div>
-              <label className="text-sm text-[hsl(var(--muted-foreground))]">レポート日付</label>
+              <label className="text-sm text-[hsl(var(--muted-foreground))]">レポート日付{importType === "rakuten_access" ? "（CSV内に日付列がない場合に使用）" : ""}</label>
               <Input type="date" value={reportDate} onChange={(e) => setReportDate(e.target.value)} className="w-48" />
             </div>
           </div>
@@ -148,8 +211,29 @@ export default function ImportPage() {
           <Card className="bg-[hsl(var(--muted))]">
             <CardContent className="p-4 text-sm text-[hsl(var(--muted-foreground))]">
               <p className="font-medium mb-2">対応レポート形式:</p>
-              <p><strong>ビジネスレポート:</strong> セラーセントラル → レポート → ビジネスレポート → 詳細ページ 売上・トラフィック（子ASIN別）</p>
-              <p><strong>広告レポート:</strong> セラーセントラル → 広告 → 広告レポート → スポンサープロダクト</p>
+              {importType === "business" && (
+                <p>セラーセントラル → レポート → ビジネスレポート → 詳細ページ 売上・トラフィック（子ASIN別）</p>
+              )}
+              {importType === "advertising" && (
+                <p>セラーセントラル → 広告 → 広告レポート → スポンサープロダクト</p>
+              )}
+              {importType === "monthly_summary" && (
+                <div className="space-y-1">
+                  <p>セラーセントラル → レポート → ビジネスレポート → 月別サマリー</p>
+                  <p className="text-xs">「表示」を「月別」にして対象期間を選択し、CSVダウンロード</p>
+                  <p className="text-xs text-yellow-400">
+                    ※ 取り込んだ月別合計が、月別分析ページの売上合計に優先表示されます
+                  </p>
+                </div>
+              )}
+              {importType === "rakuten_access" && (
+                <div className="space-y-1">
+                  <p>楽天RMS → データ分析 → アクセス分析 → 商品別アクセス数</p>
+                  <p className="text-xs mt-2">必要な列: <strong>商品番号</strong>（または商品管理番号）、<strong>アクセス人数</strong>（またはアクセス数）、<strong>転換率</strong>（任意）</p>
+                  <p className="text-xs">商品番号は楽天の商品マスタ（設定 → 商品マスタ管理 → 楽天タブ）の「商品番号」と一致させてください</p>
+                  <p className="text-xs text-yellow-400">※ 既存の売上データ（注文数・売上金額）は上書きされません。アクセス数とCVRのみ更新されます</p>
+                </div>
+              )}
             </CardContent>
           </Card>
         </CardContent>

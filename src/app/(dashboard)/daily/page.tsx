@@ -56,8 +56,10 @@ export default function DailyAnalysisPage() {
     if (product) {
       const costPrice = product.cost_price || 0;
       const fbaFeeRate = product.fba_fee_rate || 15;
-      acc[d].cost += costPrice * (row.units_sold || 0);
-      acc[d].fba_fee += Math.round(row.sales_amount * (fbaFeeRate / 100));
+      const fbaShippingFee = product.fba_shipping_fee || 0;
+      const units = row.units_sold || 0;
+      acc[d].cost += costPrice * units;
+      acc[d].fba_fee += Math.round(row.sales_amount * (fbaFeeRate / 100)) + fbaShippingFee * units;
     }
 
     return acc;

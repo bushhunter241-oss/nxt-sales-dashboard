@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatCurrency, formatPercent, formatNumber } from "@/lib/utils";
 import { getDailySales } from "@/lib/api/sales";
+import { getMonthlyOverrides } from "@/lib/api/amazon-monthly-overrides";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
 import { CHART_COLORS } from "@/lib/constants";
 
@@ -13,6 +14,11 @@ export default function MonthlyAnalysisPage() {
   const { data: salesData = [] } = useQuery({
     queryKey: ["allSales"],
     queryFn: () => getDailySales({}),
+  });
+
+  const { data: overrides = {} } = useQuery({
+    queryKey: ["monthlyOverrides"],
+    queryFn: () => getMonthlyOverrides(),
   });
 
   // Aggregate by month
@@ -31,7 +37,20 @@ export default function MonthlyAnalysisPage() {
   const cutoff = `${now.getFullYear() - 1}-${String(now.getMonth() + 1).padStart(2, "0")}`;
   const monthlyData = Object.values(monthly)
     .filter((m: any) => m.month >= cutoff)
-    .sort((a: any, b: any) => b.month.localeCompare(a.month));
+    .sort((a: any, b: any) => b.month.localeCompare(a.month))
+    .map((row: any) => {
+      const override = (overrides as Record<string, any>)[row.month];
+      if (!override) return row;
+      return {
+        ...row,
+        sales_amount: override.total_sales,
+        orders: override.total_orders || row.orders,
+        units_sold: override.total_units || row.units_sold,
+        sessions: override.sessions || row.sessions,
+        cvr: override.cvr || row.cvr,
+        _overridden: true,
+      };
+    });
   const chartData = [...monthlyData].reverse().slice(-12).map((d: any) => ({
     month: d.month.slice(2),
     売上: d.sales_amount,
@@ -80,7 +99,12 @@ export default function MonthlyAnalysisPage() {
                 const momChange = prev ? ((m.sales_amount - prev.sales_amount) / prev.sales_amount) * 100 : 0;
                 return (
                   <TableRow key={m.month}>
-                    <TableCell className="font-medium">{m.month}</TableCell>
+                    <TableCell className="font-medium">
+                      {m.month}
+                      {m._overridden && (
+                        <span className="ml-2 text-xs text-yellow-400 border border-yellow-400/30 rounded px-1">CSV補正</span>
+                      )}
+                    </TableCell>
                     <TableCell className="text-right text-[hsl(var(--primary))]">{formatCurrency(m.sales_amount)}</TableCell>
                     <TableCell className="text-right">{formatNumber(m.orders)}</TableCell>
                     <TableCell className="text-right">{formatNumber(m.units_sold)}</TableCell>

@@ -31,7 +31,6 @@ const navigation: NavEntry[] = [
     collapsible: true,
     defaultOpen: true,
     items: [
-      { name: "ダッシュボード", href: "/rakuten", icon: LayoutDashboard },
       { name: "日別分析", href: "/rakuten/daily", icon: CalendarDays },
       { name: "月別分析", href: "/rakuten/monthly", icon: CalendarRange },
       { name: "商品別分析", href: "/rakuten/products", icon: Package },
@@ -49,6 +48,7 @@ const navigation: NavEntry[] = [
     items: [
       { name: "利益シミュレーション", href: "/simulation", icon: Calculator },
       { name: "目標・進捗管理", href: "/goals", icon: Target },
+      { name: "施策カレンダー", href: "/events", icon: CalendarDays },
     ],
   },
   {
@@ -69,7 +69,7 @@ const navigation: NavEntry[] = [
 
 function CollapsibleSection({ section, pathname }: { section: NavSection; pathname: string }) {
   const hasActive = section.items.some((item) =>
-    item.href === "/rakuten" ? pathname === "/rakuten" : pathname === item.href || pathname.startsWith(item.href + "/")
+    pathname === item.href || pathname.startsWith(item.href + "/")
   );
   const [open, setOpen] = useState(section.defaultOpen ?? hasActive);
 
@@ -83,9 +83,7 @@ function CollapsibleSection({ section, pathname }: { section: NavSection; pathna
         {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
       </button>
       {open && section.items.map((subItem) => {
-        const isActive = subItem.href === "/rakuten"
-          ? pathname === "/rakuten"
-          : pathname === subItem.href || pathname.startsWith(subItem.href + "/");
+        const isActive = pathname === subItem.href || pathname.startsWith(subItem.href + "/");
         return (
           <Link
             key={subItem.href}

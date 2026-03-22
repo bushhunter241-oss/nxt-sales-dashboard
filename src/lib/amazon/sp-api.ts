@@ -118,24 +118,26 @@ export async function getOrders(
   let nextToken: string | undefined;
 
   do {
-    // Use JST (UTC+9) boundaries so date ranges match Amazon Seller Central (which shows in JST)
-    // e.g. startDate="2026-03-06" → CreatedAfter="2026-03-06T00:00:00+09:00" = "2026-03-05T15:00:00Z"
-    const createdAfter = new Date(startDate + "T00:00:00+09:00");
-    const endDateTime = new Date(endDate + "T23:59:59+09:00");
-
-    // CreatedBefore must be at least 2 minutes before current time per SP-API rules
-    const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000);
-    const createdBefore = endDateTime > twoMinutesAgo ? twoMinutesAgo : endDateTime;
-
-    const params: Record<string, string> = {
-      MarketplaceIds: AMAZON_CONFIG.MARKETPLACE_ID,
-      CreatedAfter: createdAfter.toISOString(),
-      CreatedBefore: createdBefore.toISOString(),
-      OrderStatuses: "Shipped,Unshipped,PartiallyShipped",
-    };
+    let params: Record<string, string>;
 
     if (nextToken) {
-      params.NextToken = nextToken;
+      // SP-API rule: when using NextToken, do NOT include any other parameters
+      params = { NextToken: nextToken };
+    } else {
+      // Use JST (UTC+9) boundaries so date ranges match Amazon Seller Central (which shows in JST)
+      const createdAfter = new Date(startDate + "T00:00:00+09:00");
+      const endDateTime = new Date(endDate + "T23:59:59+09:00");
+
+      // CreatedBefore must be at least 2 minutes before current time per SP-API rules
+      const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000);
+      const createdBefore = endDateTime > twoMinutesAgo ? twoMinutesAgo : endDateTime;
+
+      params = {
+        MarketplaceIds: AMAZON_CONFIG.MARKETPLACE_ID,
+        CreatedAfter: createdAfter.toISOString(),
+        CreatedBefore: createdBefore.toISOString(),
+        OrderStatuses: "Shipped,Unshipped,PartiallyShipped",
+      };
     }
 
     const response = await spApiRequest<GetOrdersResponse>({
@@ -465,7 +467,7 @@ export async function downloadSalesTrafficReport(
 }
 
 // ============================================
-// BSR Rankings via Listings Report
+// BSR Rankings via Catalog Items API (sub-category priority)
 // ============================================
 
 export interface CatalogBsrItem {
@@ -477,189 +479,96 @@ export interface CatalogBsrItem {
   }[];
 }
 
-// Module-level cache for listings report BSR data (reset per invocation)
-let listingsReportBsrCache: Map<string, number> | null = null;
-let listingsReportDebugInfo: string = "";
-
-/**
- * Download GET_MERCHANT_LISTINGS_ALL_DATA report and extract BSR (sales rank) data.
- * This report works with the "販売パートナーのインサイト" role.
- * Returns a Map of ASIN → sales rank.
- */
-async function downloadListingsBsrReport(): Promise<Map<string, number>> {
-  const bsrMap = new Map<string, number>();
-
-  try {
-    // 1. Create report request
-    console.log("[BSR Listings] Creating GET_MERCHANT_LISTINGS_ALL_DATA report...");
-    const data = await spApiRequest<CreateReportResponse>({
-      method: "POST",
-      path: "/reports/2021-06-30/reports",
-      body: {
-        reportType: "GET_MERCHANT_LISTINGS_ALL_DATA",
-        marketplaceIds: [AMAZON_CONFIG.MARKETPLACE_ID],
-      },
-    });
-    const reportId = data.reportId;
-    console.log(`[BSR Listings] Report created: ${reportId}`);
-
-    // 2. Poll for completion
-    const startTime = Date.now();
-    const maxWaitMs = 60000;
-    let status: ReportStatus;
-
-    while (true) {
-      await sleep(5000);
-      status = await getReportStatus(reportId);
-      console.log(`[BSR Listings] Status: ${status.processingStatus}`);
-
-      if (status.processingStatus === "DONE") break;
-      if (status.processingStatus === "FATAL" || status.processingStatus === "CANCELLED") {
-        console.error(`[BSR Listings] Report failed: ${status.processingStatus}`);
-        listingsReportDebugInfo = `Report ${status.processingStatus}`;
-        return bsrMap;
-      }
-      if (Date.now() - startTime > maxWaitMs) {
-        console.warn("[BSR Listings] Timeout waiting for report");
-        listingsReportDebugInfo = "Report timeout";
-        return bsrMap;
-      }
-    }
-
-    // 3. Download report document
-    if (!status!.reportDocumentId) {
-      console.error("[BSR Listings] No reportDocumentId");
-      listingsReportDebugInfo = "No reportDocumentId";
-      return bsrMap;
-    }
-
-    const doc = await getReportDocument(status!.reportDocumentId);
-    console.log(`[BSR Listings] Downloading document, compression: ${doc.compressionAlgorithm || "none"}`);
-
-    const response = await fetch(doc.url);
-    if (!response.ok) {
-      throw new Error(`Failed to download report: ${response.status}`);
-    }
-
-    let reportText: string;
-    if (doc.compressionAlgorithm === "GZIP") {
-      const buffer = await response.arrayBuffer();
-      const ds = new DecompressionStream("gzip");
-      const decompressed = new Response(
-        new Blob([buffer]).stream().pipeThrough(ds)
-      );
-      reportText = await decompressed.text();
-    } else {
-      reportText = await response.text();
-    }
-
-    // 4. Parse TSV
-    const lines = reportText.split("\n").filter(l => l.trim());
-    if (lines.length === 0) {
-      listingsReportDebugInfo = "Empty report";
-      return bsrMap;
-    }
-
-    const headers = lines[0].split("\t").map(h => h.trim().toLowerCase());
-    console.log(`[BSR Listings] Report headers (${headers.length}): ${headers.join(", ")}`);
-    listingsReportDebugInfo = `Headers: ${headers.join(", ")}`;
-
-    // Find relevant columns
-    const asinCol = headers.findIndex(h => h === "asin1" || h === "asin");
-    const rankCandidates = ["sales-rank", "salesrank", "sales_rank", "rank"];
-    let rankCol = -1;
-    for (const candidate of rankCandidates) {
-      rankCol = headers.findIndex(h => h === candidate);
-      if (rankCol !== -1) break;
-    }
-
-    // Also try partial match if exact match failed
-    if (rankCol === -1) {
-      rankCol = headers.findIndex(h => h.includes("rank") && !h.includes("ranking"));
-      if (rankCol === -1) {
-        rankCol = headers.findIndex(h => h.includes("rank"));
-      }
-    }
-
-    if (asinCol === -1) {
-      console.log("[BSR Listings] No ASIN column found in report");
-      listingsReportDebugInfo += " | No ASIN column";
-      return bsrMap;
-    }
-
-    console.log(`[BSR Listings] ASIN column: ${asinCol} (${headers[asinCol]}), Rank column: ${rankCol >= 0 ? `${rankCol} (${headers[rankCol]})` : "NOT FOUND"}`);
-
-    if (rankCol === -1) {
-      // No rank column found - log all headers for debugging
-      console.log(`[BSR Listings] No rank column found. All headers: ${headers.join(" | ")}`);
-      listingsReportDebugInfo += " | No rank column found";
-
-      // Still parse ASINs for debugging
-      const asins: string[] = [];
-      for (let i = 1; i < Math.min(lines.length, 5); i++) {
-        const cols = lines[i].split("\t");
-        if (cols[asinCol]) asins.push(cols[asinCol].trim());
-      }
-      listingsReportDebugInfo += ` | Sample ASINs: ${asins.join(", ")}`;
-      return bsrMap;
-    }
-
-    // Parse data rows
-    for (let i = 1; i < lines.length; i++) {
-      const cols = lines[i].split("\t");
-      const asin = cols[asinCol]?.trim();
-      const rankStr = cols[rankCol]?.trim();
-      const rank = parseInt(rankStr || "");
-      if (asin && !isNaN(rank) && rank > 0) {
-        bsrMap.set(asin, rank);
-      }
-    }
-
-    console.log(`[BSR Listings] Parsed ${bsrMap.size} ASINs with BSR from ${lines.length - 1} rows`);
-    return bsrMap;
-  } catch (error) {
-    const errMsg = error instanceof Error ? error.message : String(error);
-    console.error(`[BSR Listings] Error: ${errMsg}`);
-    listingsReportDebugInfo = `Error: ${errMsg}`;
-    return bsrMap;
-  }
+interface CatalogSalesRankEntry {
+  classificationId?: string;
+  title?: string;
+  link?: string;
+  rank?: number;
 }
 
+interface CatalogSalesRanksResponse {
+  asin: string;
+  salesRanks?: {
+    marketplaceId: string;
+    classificationRanks?: CatalogSalesRankEntry[];
+    displayGroupRanks?: CatalogSalesRankEntry[];
+  }[];
+}
+
+let bsrDebugInfo: string = "";
+
 /**
- * Get BSR (Best Sellers Rank) for a product using the Listings Report.
- * Downloads GET_MERCHANT_LISTINGS_ALL_DATA report once and caches the result.
- * Works with the "販売パートナーのインサイト" role (no Product Listing/Pricing role needed).
+ * Get BSR (Best Sellers Rank) for a product using the Catalog Items API.
+ * Prioritizes classificationRanks (sub-category / 小カテゴリー) over
+ * displayGroupRanks (main category / 大カテゴリー).
+ *
+ * Uses: GET /catalog/2022-04-01/items/{asin}?includedData=salesRanks
  */
 export async function getCatalogItemBSR(asin: string): Promise<CatalogBsrItem | null> {
-  // Download listings report once and cache
-  if (listingsReportBsrCache === null) {
-    console.log("[BSR] Downloading listings report for BSR data...");
-    listingsReportBsrCache = await downloadListingsBsrReport();
-    console.log(`[BSR] Got BSR for ${listingsReportBsrCache.size} ASINs from listings report. Debug: ${listingsReportDebugInfo}`);
-  }
+  try {
+    const data = await spApiRequest<CatalogSalesRanksResponse>({
+      method: "GET",
+      path: `/catalog/2022-04-01/items/${asin}`,
+      params: {
+        marketplaceIds: AMAZON_CONFIG.MARKETPLACE_ID,
+        includedData: "salesRanks",
+      },
+    });
 
-  const rank = listingsReportBsrCache.get(asin);
-  if (rank !== undefined) {
-    console.log(`[BSR] ${asin}: rank #${rank} from listings report`);
-    return {
-      asin,
-      rankings: [{
-        categoryId: "listing-report",
-        categoryName: "Listings Report",
-        rank,
-      }],
-    };
-  }
+    const salesRanks = data.salesRanks || [];
+    const rankings: CatalogBsrItem["rankings"] = [];
 
-  console.log(`[BSR] ${asin}: No BSR found in listings report`);
-  return { asin, rankings: [] };
+    for (const sr of salesRanks) {
+      // 1. Sub-category (classificationRanks) — prioritized
+      const subCatRankings: CatalogBsrItem["rankings"] = [];
+      if (sr.classificationRanks) {
+        for (const cr of sr.classificationRanks) {
+          if (cr.rank && cr.rank > 0) {
+            subCatRankings.push({
+              categoryId: cr.classificationId || "sub-category",
+              categoryName: cr.title || "サブカテゴリー",
+              rank: cr.rank,
+            });
+          }
+        }
+      }
+
+      // 2. Main category (displayGroupRanks) — fallback only if no sub-category
+      if (subCatRankings.length > 0) {
+        rankings.push(...subCatRankings);
+      } else if (sr.displayGroupRanks) {
+        for (const dr of sr.displayGroupRanks) {
+          if (dr.rank && dr.rank > 0) {
+            rankings.push({
+              categoryId: dr.link || "main-category",
+              categoryName: dr.title || "大カテゴリー",
+              rank: dr.rank,
+            });
+          }
+        }
+      }
+    }
+
+    if (rankings.length > 0) {
+      console.log(`[BSR] ${asin}: ${rankings.map(r => `#${r.rank} in ${r.categoryName}`).join(", ")}`);
+    } else {
+      console.log(`[BSR] ${asin}: No BSR data from Catalog API`);
+    }
+
+    return { asin, rankings };
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error(`[BSR] ${asin}: Catalog API error: ${msg}`);
+    bsrDebugInfo = `Catalog API error for ${asin}: ${msg}`;
+    return { asin, rankings: [] };
+  }
 }
 
 /**
- * Get debug info from the last listings report download (for API response)
+ * Get debug info from the last BSR fetch (for API response)
  */
 export function getListingsReportDebugInfo(): string {
-  return listingsReportDebugInfo;
+  return bsrDebugInfo;
 }
 
 // ============================================
@@ -784,6 +693,61 @@ export async function getActualFbaFees(
     orderCount: data.count,
     avgFbaShippingFeePerUnit: data.count > 0 ? Math.round(data.totalFee / data.count) : 0,
   }));
+}
+
+// ============================================
+// Product Fees Estimation API
+// ============================================
+
+interface FeesEstimateResult {
+  FBAFulfillmentFeePerUnit: number;
+  ReferralFeePerUnit: number;
+}
+
+/**
+ * Get FBA fee estimate for a given ASIN and price.
+ * Uses /products/fees/v0/items/{Asin}/feesEstimate (no Finances permission needed).
+ * Returns per-unit FBA fulfillment fee, or null on failure.
+ */
+export async function getFbaFeeEstimate(
+  asin: string,
+  price: number
+): Promise<FeesEstimateResult | null> {
+  try {
+    const response = await spApiRequest<any>({
+      method: "POST",
+      path: `/products/fees/v0/items/${asin}/feesEstimate`,
+      body: {
+        FeesEstimateRequest: {
+          MarketplaceId: AMAZON_CONFIG.MARKETPLACE_ID,
+          IsAmazonFulfilled: true,
+          PriceToEstimateFees: {
+            ListingPrice: { CurrencyCode: "JPY", Amount: price },
+          },
+          Identifier: asin,
+        },
+      },
+    });
+
+    const feeDetail = response?.payload?.FeesEstimateResult?.FeesEstimate?.FeeDetailList;
+    if (!feeDetail || !Array.isArray(feeDetail)) return null;
+
+    let fbaFee = 0;
+    let referralFee = 0;
+
+    for (const fee of feeDetail) {
+      if (fee.FeeType === "FBAFees") {
+        fbaFee = Math.round(Math.abs(fee.FeeAmount?.Amount || 0));
+      } else if (fee.FeeType === "ReferralFee") {
+        referralFee = Math.round(Math.abs(fee.FeeAmount?.Amount || 0));
+      }
+    }
+
+    return { FBAFulfillmentFeePerUnit: fbaFee, ReferralFeePerUnit: referralFee };
+  } catch (err) {
+    console.warn(`[SP-API Fees] Failed to estimate fees for ${asin}: ${err instanceof Error ? err.message : err}`);
+    return null;
+  }
 }
 
 export type { SpApiOrder, SpApiOrderItem, FbaInventoryItem };

@@ -1,130 +1,1427 @@
 "use client";
-import { useState } from "react";
+import { useState, useMemo, useRef, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { PageHeader } from "@/components/layout/page-header";
 import { PeriodFilter } from "@/components/layout/period-filter";
-import { KPICard } from "@/components/layout/kpi-card";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Select } from "@/components/ui/select";
 import { formatCurrency, formatPercent, formatNumber, getDateRange } from "@/lib/utils";
-import { getRakutenProductSalesSummary } from "@/lib/api/rakuten-sales";
-import { DollarSign, TrendingUp, TrendingDown, Package } from "lucide-react";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, Cell } from "recharts";
+import { getRakutenProductSalesSummary, getRakutenDailySales, getRakutenProducts } from "@/lib/api/rakuten-sales";
+import { getMonthlyGoals } from "@/lib/api/goals";
+import { getProductEvents } from "@/lib/api/events";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { BarChart, Bar, LineChart, Line, ComposedChart, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, PieChart, Pie, Cell, ReferenceLine } from "recharts";
+import { CHART_COLORS } from "@/lib/constants";
 
-const RAKUTEN_RED = "#bf0000";
+// Product group color mapping (partial match)
+const GROUP_COLOR_RULES: Array<{ match: string; color: string }> = [
+  { match: "feela", color: "#22c55e" },
+  { match: "Moon", color: "#eab308" },
+  { match: "お香", color: "#f97316" },
+  { match: "お得用", color: "#ec4899" },
+  { match: "RHINON", color: "#3b82f6" },
+  { match: "ホワイトセージ", color: "#6b7280" },
+];
 
-export default function RakutenProductsPage() {
+const EVENT_TYPE_LABELS: Record<string, string> = {
+  sale: "セール", image_change: "画像変更", ad_campaign: "広告施策",
+  price_change: "価格変更", listing_update: "出品更新", other: "その他",
+};
+
+function getGroupColor(name: string, fallbackIndex: number): string {
+  for (const rule of GROUP_COLOR_RULES) {
+    if (name.includes(rule.match)) return rule.color;
+  }
+  return CHART_COLORS[fallbackIndex % CHART_COLORS.length];
+}
+
+// Get group key: use DB product_group if set, otherwise fallback to name
+function getGroupKey(product: any): string {
+  if (product?.product_group) return product.product_group;
+  const name = product?.name || "";
+  if (!name) return "未分類";
+  return name.length > 25 ? name.slice(0, 25) : name;
+}
+
+interface GroupedProduct {
+  groupKey: string;
+  groupName: string;
+  children: any[];
+  total_sales: number;
+  total_orders: number;
+  total_units: number;
+  total_cost: number;
+  total_fee: number;
+  total_ad_spend: number;
+  total_access: number;
+  gross_profit: number;
+  net_profit: number;
+  profit_rate: number;
+  unit_profit: number;
+}
+
+function groupProducts(products: any[]): GroupedProduct[] {
+  const groups: Record<string, GroupedProduct> = {};
+  for (const p of products) {
+    const key = getGroupKey(p.product);
+    if (!groups[key]) {
+      groups[key] = {
+        groupKey: key,
+        groupName: key,
+        children: [],
+        total_sales: 0, total_orders: 0, total_units: 0,
+        total_cost: 0, total_fee: 0, total_ad_spend: 0, total_access: 0,
+        gross_profit: 0, net_profit: 0, profit_rate: 0, unit_profit: 0,
+      };
+    }
+    const g = groups[key];
+    g.children.push(p);
+    g.total_sales += p.total_sales || 0;
+    g.total_orders += p.total_orders || 0;
+    g.total_units += p.total_units || 0;
+    g.total_cost += p.total_cost || 0;
+    g.total_fee += p.total_fee || 0;
+    g.total_ad_spend += p.total_ad_spend || 0;
+    g.total_access += p.total_access || 0;
+    g.gross_profit += p.gross_profit || 0;
+    g.net_profit += p.net_profit || 0;
+  }
+  for (const g of Object.values(groups)) {
+    g.profit_rate = g.total_sales > 0 ? (g.net_profit / g.total_sales) * 100 : 0;
+    g.unit_profit = g.total_units > 0 ? Math.round(g.net_profit / g.total_units) : 0;
+  }
+  return Object.values(groups);
+}
+
+export default function RakutenProductAnalysisPage() {
   const [period, setPeriod] = useState("30days");
+  const [sortKey, setSortKey] = useState<string>("total_sales");
+  const [viewMode, setViewMode] = useState<string>("grouped");
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [metricsTab, setMetricsTab] = useState<string>("access");
+  const [detailGroup, setDetailGroup] = useState("");
+  const [detailPeriod, setDetailPeriod] = useState<"current" | "compare">("current");
   const dateRange = getDateRange(period);
+
+  const { data: products = [] } = useQuery({
+    queryKey: ["rakutenProducts"],
+    queryFn: () => getRakutenProducts(),
+  });
 
   const { data: productSummary = [] } = useQuery({
     queryKey: ["rakutenProductSummary", dateRange],
     queryFn: () => getRakutenProductSalesSummary(dateRange),
   });
 
-  const sorted = (productSummary as any[]).sort((a: any, b: any) => b.total_sales - a.total_sales);
-  const totalSales = sorted.reduce((s: number, p: any) => s + p.total_sales, 0);
-  const totalProfit = sorted.reduce((s: number, p: any) => s + (p.net_profit || 0), 0);
-  const profitRate = totalSales > 0 ? (totalProfit / totalSales) * 100 : 0;
-  const totalCost = sorted.reduce((s: number, p: any) => s + (p.total_cost || 0), 0);
-  const totalFee = sorted.reduce((s: number, p: any) => s + (p.total_fee || 0), 0);
-  const totalAdSpend = sorted.reduce((s: number, p: any) => s + (p.total_ad_spend || 0), 0);
+  const { data: allDailySales = [] } = useQuery({
+    queryKey: ["rakutenAllDailySales", dateRange],
+    queryFn: () => getRakutenDailySales({ ...dateRange }),
+  });
 
-  // Profit breakdown chart
-  const profitChartData = sorted.slice(0, 8).map((p: any) => ({
-    name: (p.product?.name || "不明").slice(0, 12),
-    純利益: p.net_profit || 0,
-    原価: p.total_cost || 0,
-    手数料: p.total_fee || 0,
-    広告費: p.total_ad_spend || 0,
-  }));
+  // Current month info for goals/BEP
+  const now = new Date();
+  const currentYearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const currentMonthStart = `${currentYearMonth}-01`;
+  const currentMonthEnd = now.toISOString().split("T")[0];
+  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  const dayOfMonth = now.getDate();
+
+  const { data: monthlyGoals = [] } = useQuery({
+    queryKey: ["monthlyGoals", currentYearMonth],
+    queryFn: () => getMonthlyGoals(currentYearMonth),
+  });
+
+  // Dedicated current month product summary for BEP
+  const { data: currentMonthSummary = [] } = useQuery({
+    queryKey: ["rakutenCurrentMonthSummary", currentMonthStart, currentMonthEnd],
+    queryFn: () => getRakutenProductSalesSummary({ startDate: currentMonthStart, endDate: currentMonthEnd }),
+  });
+
+  // Last month date range for comparison
+  const lastMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const lastYearMonth = `${lastMonthDate.getFullYear()}-${String(lastMonthDate.getMonth() + 1).padStart(2, "0")}`;
+  const lastMonthStart = `${lastYearMonth}-01`;
+  const lastMonthEnd = new Date(lastMonthDate.getFullYear(), lastMonthDate.getMonth() + 1, 0).toISOString().split("T")[0];
+
+  const { data: lastMonthSales = [] } = useQuery({
+    queryKey: ["rakutenLastMonthSales", lastMonthStart, lastMonthEnd],
+    queryFn: () => getRakutenDailySales({ startDate: lastMonthStart, endDate: lastMonthEnd }),
+  });
+
+  // Product events for chart overlay
+  const { data: productEvents = [] } = useQuery({
+    queryKey: ["productEvents", dateRange],
+    queryFn: () => getProductEvents({ startDate: dateRange.startDate, endDate: dateRange.endDate }),
+  });
+
+  // Group-level daily metrics (access, CVR, sales, profit) aggregated by product_group + date
+  const groupDailyMetrics = useMemo(() => {
+    if (!allDailySales || allDailySales.length === 0) return { data: [] as any[], groups: [] as string[] };
+
+    // Build product_id -> group mapping
+    const pidToGroup = new Map<string, string>();
+    for (const p of products as any[]) {
+      pidToGroup.set(p.id, p.product_group || p.name);
+    }
+
+    // Aggregate by date + group
+    const dateGroupMap: Record<string, Record<string, { access: number; orders: number; units: number; sales: number }>> = {};
+    const allGroups = new Set<string>();
+
+    for (const d of allDailySales as any[]) {
+      const group = d.rakuten_product ? (d.rakuten_product.product_group || d.rakuten_product.name) : pidToGroup.get(d.product_id);
+      if (!group) continue;
+      allGroups.add(group);
+      const date = d.date;
+      if (!dateGroupMap[date]) dateGroupMap[date] = {};
+      if (!dateGroupMap[date][group]) dateGroupMap[date][group] = { access: 0, orders: 0, units: 0, sales: 0 };
+      dateGroupMap[date][group].access += d.access_count || 0;
+      dateGroupMap[date][group].orders += d.orders || 0;
+      dateGroupMap[date][group].units += d.units_sold || 0;
+      dateGroupMap[date][group].sales += d.sales_amount || 0;
+    }
+
+    // Get cost/fee info per group from products for profit calculation
+    const groupProfitInfo: Record<string, { costPerUnit: number; feeRate: number }> = {};
+    for (const p of products as any[]) {
+      const group = p.product_group || p.name;
+      if (!groupProfitInfo[group]) {
+        groupProfitInfo[group] = { costPerUnit: p.cost_price || 0, feeRate: p.fee_rate || 10 };
+      }
+    }
+
+    const groups = Array.from(allGroups);
+    const shortLabels = new Map<string, string>();
+    for (const g of groups) {
+      shortLabels.set(g, g.length > 15 ? g.slice(0, 15) + "…" : g);
+    }
+
+    return { dateGroupMap, groups, shortLabels, groupProfitInfo };
+  }, [allDailySales, products, productSummary]);
+
+  // Build chart data for the selected metrics tab
+  const metricsChartData = useMemo(() => {
+    const { dateGroupMap, groups, shortLabels, groupProfitInfo } = groupDailyMetrics as any;
+    if (!dateGroupMap || !groups || groups.length === 0) return { data: [], groups: [] };
+
+    const data = Object.entries(dateGroupMap as Record<string, Record<string, any>>)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, groupData]) => {
+        const row: Record<string, any> = { date: date.slice(5) };
+        for (const g of groups) {
+          const d = groupData[g];
+          if (!d) continue;
+          const label = shortLabels.get(g)!;
+          if (metricsTab === "access") {
+            row[label] = d.access;
+          } else if (metricsTab === "cvr") {
+            row[label] = d.access > 0 ? Math.round((d.orders / d.access) * 10000) / 100 : 0;
+          } else if (metricsTab === "sales") {
+            row[label] = d.sales;
+          } else if (metricsTab === "profit") {
+            const info = groupProfitInfo[g] || { costPerUnit: 0, feeRate: 10 };
+            const cost = info.costPerUnit * d.units;
+            const fee = Math.round(d.sales * (info.feeRate / 100));
+            row[label] = d.sales - cost - fee;
+          }
+        }
+        return row;
+      });
+
+    return { data, groups: groups.map((g: string) => shortLabels.get(g)!) };
+  }, [groupDailyMetrics, metricsTab]);
+
+  // Build event lookup by date (MM-DD) for chart overlay
+  const detailEventsByDate = useMemo(() => {
+    if (!detailGroup) return new Map<string, any[]>();
+    const map = new Map<string, any[]>();
+    for (const ev of productEvents as any[]) {
+      if (ev.product_group === detailGroup) {
+        const key = ev.date.slice(5); // MM-DD
+        if (!map.has(key)) map.set(key, []);
+        map.get(key)!.push(ev);
+      }
+    }
+    return map;
+  }, [detailGroup, productEvents]);
+
+  // Detail analysis data for a single selected group
+  const detailChartData = useMemo(() => {
+    const { dateGroupMap, groupProfitInfo } = groupDailyMetrics as any;
+    if (!detailGroup || !dateGroupMap) return [];
+
+    return Object.entries(dateGroupMap as Record<string, Record<string, any>>)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, groupData]) => {
+        const d = groupData[detailGroup];
+        const dateKey = date.slice(5);
+        const dayEvents = detailEventsByDate.get(dateKey) || [];
+        if (!d) return { date: dateKey, fullDate: date, アクセス: 0, CVR: 0, 売上: 0, 利益: 0, 注文数: 0, events: dayEvents };
+        const info = groupProfitInfo?.[detailGroup] || { costPerUnit: 0, feeRate: 10 };
+        const cost = info.costPerUnit * d.units;
+        const fee = Math.round(d.sales * (info.feeRate / 100));
+        const profit = d.sales - cost - fee;
+        const cvr = d.access > 0 ? Math.round((d.orders / d.access) * 10000) / 100 : 0;
+        return {
+          date: dateKey,
+          fullDate: date,
+          アクセス: d.access,
+          CVR: cvr,
+          売上: d.sales,
+          利益: profit,
+          注文数: d.orders,
+          events: dayEvents,
+        };
+      });
+  }, [detailGroup, groupDailyMetrics, detailEventsByDate]);
+
+  // Merge all master products into productSummary, fix parent groups & cost fallback
+  const mergedProducts = useMemo(() => {
+    const allProducts = products as any[];
+    const summaryMap = new Map<string, any>();
+    for (const ps of productSummary as any[]) {
+      if (ps.product?.id) summaryMap.set(ps.product.id, ps);
+    }
+
+    // Step 1: Build parent→children map using parent_product_id
+    const childrenByParent = new Map<string, any[]>();
+    for (const p of allProducts) {
+      if (p.parent_product_id) {
+        if (!childrenByParent.has(p.parent_product_id)) childrenByParent.set(p.parent_product_id, []);
+        childrenByParent.get(p.parent_product_id)!.push(p);
+      }
+    }
+
+    // Step 2: Fix product_group — if parent has no group, inherit from children
+    const groupFixed = new Map<string, string>(); // product.id → resolved group
+    for (const p of allProducts) {
+      let grp = p.product_group || "";
+      if (!grp) {
+        // Check if this is a parent with children that have a group
+        const children = childrenByParent.get(p.product_id) || [];
+        for (const child of children) {
+          if (child.product_group) { grp = child.product_group; break; }
+        }
+      }
+      if (!grp && p.parent_product_id) {
+        // Check if parent has a group
+        const parent = allProducts.find((pp: any) => pp.product_id === p.parent_product_id);
+        if (parent?.product_group) grp = parent.product_group;
+      }
+      groupFixed.set(p.id, grp);
+    }
+
+    // Step 3: Find max cost/fee among children for parent cost fallback
+    const childMaxCost = new Map<string, { cost_price: number; fee_rate: number; shipping_fee: number }>();
+    for (const p of allProducts) {
+      if (p.parent_product_id) {
+        const parent = allProducts.find((pp: any) => pp.product_id === p.parent_product_id);
+        if (parent) {
+          const existing = childMaxCost.get(parent.id) || { cost_price: 0, fee_rate: 0, shipping_fee: 0 };
+          childMaxCost.set(parent.id, {
+            cost_price: Math.max(existing.cost_price, p.cost_price || 0),
+            fee_rate: Math.max(existing.fee_rate, p.fee_rate || 0),
+            shipping_fee: Math.max(existing.shipping_fee, p.shipping_fee || 0),
+          });
+        }
+      }
+    }
+
+    // Step 4: Build merged result
+    const result: any[] = [];
+    const seen = new Set<string>();
+
+    for (const ps of productSummary as any[]) {
+      const pid = ps.product?.id;
+      if (!pid) continue;
+      seen.add(pid);
+
+      const prod = ps.product;
+      const resolvedGroup = groupFixed.get(pid) || prod.product_group || "";
+
+      // Parent cost fallback: if parent has sales but cost=0, use max child cost
+      let costPrice = prod.cost_price || 0;
+      let feeRate = prod.fee_rate || 10;
+      let shippingFee = prod.shipping_fee || 0;
+      if (costPrice === 0 && ps.total_sales > 0 && childMaxCost.has(pid)) {
+        const fallback = childMaxCost.get(pid)!;
+        costPrice = fallback.cost_price;
+        if (fallback.fee_rate > 0) feeRate = fallback.fee_rate;
+        if (fallback.shipping_fee > 0) shippingFee = fallback.shipping_fee;
+      }
+
+      // Recalculate profit with corrected costs
+      const totalCost = costPrice * (ps.total_units || 0);
+      const totalFee = Math.round((ps.total_sales || 0) * (feeRate / 100));
+      const totalShipping = shippingFee * (ps.total_units || 0);
+      const grossProfit = (ps.total_sales || 0) - totalCost - totalFee - totalShipping;
+      const netProfit = grossProfit - (ps.total_ad_spend || 0);
+
+      result.push({
+        ...ps,
+        product: { ...prod, product_group: resolvedGroup },
+        total_cost: totalCost,
+        total_fee: totalFee,
+        gross_profit: grossProfit,
+        net_profit: netProfit,
+        profit_rate: ps.total_sales > 0 ? (netProfit / ps.total_sales) * 100 : 0,
+        unit_profit: ps.total_units > 0 ? Math.round(netProfit / ps.total_units) : 0,
+      });
+    }
+
+    // Add products with no sales
+    for (const p of allProducts) {
+      if (p.is_archived || seen.has(p.id)) continue;
+      const resolvedGroup = groupFixed.get(p.id) || p.product_group || "";
+      result.push({
+        product: { ...p, product_group: resolvedGroup },
+        total_sales: 0, total_orders: 0, total_access: 0, total_units: 0,
+        total_cost: 0, total_fee: 0, total_ad_spend: 0, total_ad_sales: 0,
+        gross_profit: 0, net_profit: 0, profit_rate: 0, unit_profit: 0,
+      });
+    }
+
+    return result;
+  }, [productSummary, products]);
+
+  // Sort function
+  const sortFn = (a: any, b: any) => {
+    if (sortKey === "profit_rate") return b.profit_rate - a.profit_rate;
+    if (sortKey === "net_profit") return b.net_profit - a.net_profit;
+    if (sortKey === "total_orders") return b.total_orders - a.total_orders;
+    return b.total_sales - a.total_sales;
+  };
+
+  // Individual sorted products
+  const sortedProducts = [...mergedProducts].sort(sortFn);
+
+  // Grouped products
+  const groupedProducts = useMemo(() => {
+    const groups = groupProducts(mergedProducts);
+    return groups.sort(sortFn);
+  }, [mergedProducts, sortKey]);
+
+  // Toggle expand
+  const toggleGroup = (key: string) => {
+    setExpandedGroups(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  // Data source for charts
+  const chartSource = viewMode === "grouped" ? groupedProducts : sortedProducts;
+
+  // Summary KPIs
+  const totalSales = sortedProducts.reduce((s, p: any) => s + p.total_sales, 0);
+  const totalProfit = sortedProducts.reduce((s, p: any) => s + (p.net_profit || 0), 0);
+  const totalCost = sortedProducts.reduce((s, p: any) => s + (p.total_cost || 0), 0);
+  const totalFee = sortedProducts.reduce((s, p: any) => s + (p.total_fee || 0), 0);
+  const totalAdSpend = sortedProducts.reduce((s, p: any) => s + (p.total_ad_spend || 0), 0);
+  const totalOrders = sortedProducts.reduce((s, p: any) => s + p.total_orders, 0);
+  const overallProfitRate = totalSales > 0 ? (totalProfit / totalSales) * 100 : 0;
+
+  // Profit bar chart data (top 10)
+  const profitChartData = chartSource
+    .filter((p: any) => p.total_sales > 0)
+    .slice(0, 10)
+    .map((p: any) => {
+      const name = viewMode === "grouped" ? p.groupName : (p.product?.name || "不明");
+      const shortName = name.length > 20 ? name.slice(0, 20) + "…" : name;
+      return {
+        name: shortName,
+        売上: p.total_sales,
+        原価: p.total_cost || 0,
+        楽天手数料: p.total_fee || 0,
+        広告費: p.total_ad_spend || 0,
+        利益: p.net_profit || 0,
+      };
+    });
+
+  // Profit rate comparison chart
+  const profitRateData = chartSource
+    .filter((p: any) => p.total_sales > 0)
+    .slice(0, 10)
+    .map((p: any) => {
+      const name = viewMode === "grouped" ? p.groupName : (p.product?.name || "不明");
+      const shortName = name.length > 15 ? name.slice(0, 15) + "…" : name;
+      return {
+        name: shortName,
+        利益率: Math.round(p.profit_rate * 10) / 10,
+        利益: p.net_profit || 0,
+      };
+    });
+
+  const pieData = chartSource
+    .filter((p: any) => p.total_sales > 0)
+    .map((p: any, i: number) => {
+      const name = (viewMode === "grouped" ? p.groupName : (p.product?.name || "不明")).slice(0, 20);
+      return {
+        name,
+        value: p.total_sales,
+        color: getGroupColor(name, i),
+      };
+    });
+
+  // Build group options from products
+  const groupOptions = useMemo(() => {
+    const seen = new Set<string>();
+    const opts: Array<{ value: string; label: string }> = [{ value: "", label: "グループを選択" }];
+    for (const p of products as any[]) {
+      const group = p.product_group || p.name;
+      if (!seen.has(group)) {
+        seen.add(group);
+        opts.push({ value: group, label: group });
+      }
+    }
+    return opts;
+  }, [products]);
+
+  // Monthly P&L and break-even ACoS calculation for selected detail group
+  const bepData = useMemo(() => {
+    if (!detailGroup) return null;
+
+    const groupProds = (products as any[]).filter((p: any) => (p.product_group || p.name) === detailGroup);
+    const groupProductIds = new Set(groupProds.map((p: any) => p.id));
+
+    const groupSummary = (currentMonthSummary as any[]).filter((ps: any) => groupProductIds.has(ps.product?.id));
+    const totalSales = groupSummary.reduce((s: number, p: any) => s + (p.total_sales || 0), 0);
+    const totalUnits = groupSummary.reduce((s: number, p: any) => s + (p.total_units || 0), 0);
+    const totalOrders = groupSummary.reduce((s: number, p: any) => s + (p.total_orders || 0), 0);
+    const totalAdSpend = groupSummary.reduce((s: number, p: any) => s + (p.total_ad_spend || 0), 0);
+    const totalAdSales = groupSummary.reduce((s: number, p: any) => s + (p.total_ad_sales || 0), 0);
+
+    // Cost info from first product (representative for unit economics)
+    const rep = groupProds[0] || {};
+    const costPerUnit = rep.cost_price || 0;
+    const feeRate = rep.fee_rate || 10;
+    const sellingPrice = rep.selling_price || 0;
+    const feePerUnit = sellingPrice > 0 ? Math.round(sellingPrice * feeRate / 100) : 0;
+    const grossProfitPerUnit = sellingPrice - costPerUnit - feePerUnit;
+
+    // Break-even ACoS = gross margin ratio
+    const breakEvenAcos = sellingPrice > 0 ? (grossProfitPerUnit / sellingPrice) * 100 : 0;
+
+    // Current actual ACoS
+    const currentAcos = totalAdSales > 0 ? (totalAdSpend / totalAdSales) * 100 : 0;
+
+    // Total cost & profit
+    const totalCost = costPerUnit * totalUnits;
+    const totalRakutenFee = Math.round(totalSales * feeRate / 100);
+    const grossProfit = totalSales - totalCost - totalRakutenFee;
+    const netProfit = grossProfit - totalAdSpend;
+
+    // Goals
+    const goal = (monthlyGoals as any[]).find((g: any) =>
+      g.product_group === detailGroup && !g.product_id
+    );
+
+    // Month-end projections
+    const projectedSales = dayOfMonth > 0 ? Math.round(totalSales / dayOfMonth * daysInMonth) : 0;
+    const projectedAdSpend = dayOfMonth > 0 ? Math.round(totalAdSpend / dayOfMonth * daysInMonth) : 0;
+    const projectedProfit = dayOfMonth > 0 ? Math.round(netProfit / dayOfMonth * daysInMonth) : 0;
+
+    return {
+      totalSales, totalUnits, totalOrders, totalAdSpend, totalAdSales,
+      grossProfit, netProfit, grossProfitPerUnit,
+      breakEvenAcos, currentAcos,
+      goal, projectedSales, projectedAdSpend, projectedProfit,
+      sellingPrice,
+    };
+  }, [detailGroup, products, currentMonthSummary, monthlyGoals, dayOfMonth, daysInMonth]);
+
+  // AI Consultant chat state
+  const [aiMessages, setAiMessages] = useState<Array<{ role: "user" | "assistant"; content: string }>>([]);
+  const [aiInput, setAiInput] = useState("");
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiOpen, setAiOpen] = useState(false);
+  const aiScrollRef = useRef<HTMLDivElement>(null);
+
+  const buildAiContext = useCallback(() => {
+    if (!detailGroup || !bepData) return "";
+    const goal = bepData.goal;
+    const lines = [
+      `【楽天市場・商品グループ】${detailGroup}`,
+      `【期間】${currentMonthStart} 〜 ${currentMonthEnd} (${dayOfMonth}/${daysInMonth}日経過)`,
+      ``,
+      `■ 今月の実績`,
+      `  売上: ¥${bepData.totalSales.toLocaleString()}`,
+      `  注文数: ${bepData.totalOrders}件`,
+      `  販売数: ${bepData.totalUnits}個`,
+      `  広告費: ¥${bepData.totalAdSpend.toLocaleString()}`,
+      `  粗利: ¥${bepData.grossProfit.toLocaleString()}`,
+      `  純利益: ¥${bepData.netProfit.toLocaleString()}`,
+      `  粗利/個: ¥${bepData.grossProfitPerUnit.toLocaleString()}`,
+      `  損益分岐ACoS: ${bepData.breakEvenAcos.toFixed(1)}%`,
+      `  今月ACoS: ${bepData.totalAdSales > 0 ? bepData.currentAcos.toFixed(1) + "%" : "データなし"}`,
+      `  販売単価: ¥${bepData.sellingPrice.toLocaleString()}`,
+    ];
+    if (goal) {
+      lines.push(``, `■ 月間目標`);
+      if (goal.target_sales) lines.push(`  売上目標: ¥${goal.target_sales.toLocaleString()} (達成率: ${(bepData.totalSales / goal.target_sales * 100).toFixed(1)}%)`);
+      if (goal.target_profit) lines.push(`  利益目標: ¥${goal.target_profit.toLocaleString()}`);
+      if (goal.target_orders) lines.push(`  注文目標: ${goal.target_orders}件`);
+    }
+    lines.push(``, `■ 月末予測（現在ペース）`);
+    lines.push(`  予想売上: ¥${bepData.projectedSales.toLocaleString()}`);
+    lines.push(`  想定広告費: ¥${bepData.projectedAdSpend.toLocaleString()}`);
+    lines.push(`  予想純利益: ¥${bepData.projectedProfit.toLocaleString()}`);
+
+    if (detailChartData.length > 0) {
+      const recent = detailChartData.slice(-7);
+      lines.push(``, `■ 直近${recent.length}日のアクセス×CVR推移`);
+      for (const d of recent) {
+        lines.push(`  ${d.date}: アクセス=${(d as any).アクセス} CVR=${(d as any).CVR}% 注文=${(d as any).注文数}件 売上=¥${(d as any).売上?.toLocaleString()}`);
+      }
+    }
+
+    const groupEvents = (productEvents as any[]).filter((e: any) => e.product_group === detailGroup);
+    if (groupEvents.length > 0) {
+      lines.push(``, `■ 登録済み施策`);
+      for (const ev of groupEvents.slice(-10)) {
+        lines.push(`  ${ev.date}: [${ev.event_type}] ${ev.memo || "(メモなし)"}`);
+      }
+    }
+    return lines.join("\n");
+  }, [detailGroup, bepData, currentMonthStart, currentMonthEnd, dayOfMonth, daysInMonth, detailChartData, productEvents]);
+
+  const sendAiMessage = useCallback(async (userMessage?: string) => {
+    const msg = userMessage || aiInput.trim();
+    if (!msg) return;
+    setAiInput("");
+    const newMessages = [...aiMessages, { role: "user" as const, content: msg }];
+    setAiMessages(newMessages);
+    setAiLoading(true);
+
+    const showError = (errorMsg: string) => {
+      setAiMessages([...newMessages, { role: "assistant", content: `⚠️ ${errorMsg}` }]);
+      setAiLoading(false);
+    };
+
+    try {
+      const context = newMessages.length === 1 ? buildAiContext() : "";
+      let res: Response;
+      try {
+        res = await fetch("/api/ai-analyze", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ messages: newMessages, context }),
+        });
+      } catch (fetchErr) {
+        showError("サーバーに接続できません。ネットワーク接続を確認してください。");
+        return;
+      }
+
+      if (!res.ok) {
+        let errorMsg = `サーバーエラー (${res.status})`;
+        try {
+          const err = await res.json();
+          errorMsg = err.error || errorMsg;
+        } catch {}
+        showError(errorMsg);
+        return;
+      }
+
+      const reader = res.body?.getReader();
+      if (!reader) {
+        showError("レスポンスの読み取りに失敗しました");
+        return;
+      }
+
+      const decoder = new TextDecoder();
+      let assistantText = "";
+      let hasError = false;
+      setAiMessages([...newMessages, { role: "assistant", content: "" }]);
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        for (const line of chunk.split("\n")) {
+          if (!line.startsWith("data: ")) continue;
+          const data = line.slice(6);
+          if (data === "[DONE]") continue;
+          try {
+            const parsed = JSON.parse(data);
+            if (parsed.error) {
+              showError(parsed.error);
+              hasError = true;
+              break;
+            }
+            if (parsed.text) {
+              assistantText += parsed.text;
+              setAiMessages([...newMessages, { role: "assistant", content: assistantText }]);
+            }
+          } catch {}
+        }
+        if (hasError) break;
+      }
+
+      if (!hasError && !assistantText) {
+        showError("AIからの応答がありませんでした。APIキーの設定を確認してください。");
+        return;
+      }
+
+      if (!hasError) {
+        setTimeout(() => aiScrollRef.current?.scrollTo({ top: aiScrollRef.current.scrollHeight, behavior: "smooth" }), 100);
+        setAiLoading(false);
+      }
+    } catch (err) {
+      showError(err instanceof Error ? err.message : "予期しないエラーが発生しました");
+    }
+  }, [aiInput, aiMessages, buildAiContext]);
+
+  // Last month chart data for comparison
+  const lastMonthChartData = useMemo(() => {
+    if (!detailGroup || lastMonthSales.length === 0) return [];
+    const pidToGroup = new Map<string, string>();
+    for (const p of products as any[]) pidToGroup.set(p.id, p.product_group || p.name);
+
+    const groupProfitInfo = (products as any[]).find((p: any) => (p.product_group || p.name) === detailGroup);
+    const info = { costPerUnit: groupProfitInfo?.cost_price || 0, feeRate: groupProfitInfo?.fee_rate || 10 };
+
+    const dateMap: Record<string, { access: number; orders: number; units: number; sales: number }> = {};
+    for (const d of lastMonthSales as any[]) {
+      const group = d.rakuten_product ? (d.rakuten_product.product_group || d.rakuten_product.name) : pidToGroup.get(d.product_id);
+      if (group !== detailGroup) continue;
+      const date = d.date;
+      if (!dateMap[date]) dateMap[date] = { access: 0, orders: 0, units: 0, sales: 0 };
+      dateMap[date].access += d.access_count || 0;
+      dateMap[date].orders += d.orders || 0;
+      dateMap[date].units += d.units_sold || 0;
+      dateMap[date].sales += d.sales_amount || 0;
+    }
+
+    return Object.entries(dateMap)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, d]) => {
+        const cost = info.costPerUnit * d.units;
+        const fee = Math.round(d.sales * (info.feeRate / 100));
+        const cvr = d.access > 0 ? Math.round((d.orders / d.access) * 10000) / 100 : 0;
+        return {
+          date: date.slice(8), // day only for overlay comparison
+          アクセス: d.access, CVR: cvr, 売上: d.sales,
+          利益: d.sales - cost - fee, 注文数: d.orders,
+        };
+      });
+  }, [detailGroup, lastMonthSales, products]);
+
+  const sortOptions = [
+    { value: "total_sales", label: "売上順" },
+    { value: "net_profit", label: "利益順" },
+    { value: "profit_rate", label: "利益率順" },
+    { value: "total_orders", label: "注文数順" },
+  ];
+
+  const viewOptions = [
+    { value: "grouped", label: "グループ別" },
+    { value: "individual", label: "個別商品" },
+  ];
 
   return (
     <div>
-      <PageHeader title="🔴 楽天 商品別分析" description="楽天市場の商品別収益性分析">
-        <PeriodFilter value={period} onChange={setPeriod} />
+      <PageHeader title="【楽天】商品別分析" description="楽天市場の商品別売上・利益分析">
+        <div className="flex items-center gap-2">
+          <div className="flex rounded-lg border border-[hsl(var(--border))] overflow-hidden">
+            {viewOptions.map(opt => (
+              <button
+                key={opt.value}
+                onClick={() => setViewMode(opt.value)}
+                className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+                  viewMode === opt.value
+                    ? "bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))]"
+                    : "bg-transparent text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]"
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+          <PeriodFilter value={period} onChange={setPeriod} />
+        </div>
       </PageHeader>
 
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6">
-        <KPICard title="総売上" value={formatCurrency(totalSales)} icon={DollarSign} />
-        <KPICard title="純利益" value={formatCurrency(totalProfit)} icon={totalProfit >= 0 ? TrendingUp : TrendingDown} valueClassName={totalProfit >= 0 ? "text-[hsl(var(--success))]" : "text-[hsl(var(--destructive))]"} />
-        <KPICard title="利益率" value={formatPercent(profitRate)} icon={TrendingUp} valueClassName={profitRate >= 20 ? "text-[hsl(var(--success))]" : profitRate >= 10 ? "" : "text-[hsl(var(--warning))]"} />
-        <KPICard title="原価合計" value={formatCurrency(totalCost)} icon={Package} />
-        <KPICard title="楽天手数料" value={formatCurrency(totalFee)} icon={DollarSign} />
-        <KPICard title="RPP広告費" value={formatCurrency(totalAdSpend)} icon={DollarSign} />
+      {/* KPI Cards */}
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5 mb-6">
+        <Card>
+          <CardContent className="p-4">
+            <p className="text-xs text-[hsl(var(--muted-foreground))]">売上</p>
+            <p className="text-lg font-bold text-[hsl(var(--primary))]">{formatCurrency(totalSales)}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <p className="text-xs text-[hsl(var(--muted-foreground))]">利益</p>
+            <p className={`text-lg font-bold ${totalProfit >= 0 ? "text-green-500" : "text-red-500"}`}>{formatCurrency(totalProfit)}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <p className="text-xs text-[hsl(var(--muted-foreground))]">広告費</p>
+            <p className="text-lg font-bold">{formatCurrency(totalAdSpend)}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <p className="text-xs text-[hsl(var(--muted-foreground))]">利益率</p>
+            <p className={`text-lg font-bold ${overallProfitRate >= 0 ? "text-green-500" : "text-red-500"}`}>{formatPercent(overallProfitRate)}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <p className="text-xs text-[hsl(var(--muted-foreground))]">注文数</p>
+            <p className="text-lg font-bold">{formatNumber(totalOrders)}</p>
+          </CardContent>
+        </Card>
       </div>
 
-      {profitChartData.length > 0 && (
-        <Card className="mt-6">
-          <CardHeader><CardTitle>商品別コスト内訳</CardTitle></CardHeader>
+      {/* Charts Row */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        {/* Profit Breakdown Chart */}
+        <Card>
+          <CardHeader>
+            <CardTitle>商品別 売上・コスト内訳</CardTitle>
+          </CardHeader>
           <CardContent>
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={profitChartData} layout="vertical">
+            <ResponsiveContainer width="100%" height={350}>
+              <BarChart data={profitChartData} layout="vertical" margin={{ left: 10 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(0 0% 20%)" />
-                <XAxis type="number" stroke="hsl(0 0% 50%)" fontSize={12} tickFormatter={(v) => `¥${(v / 1000).toFixed(0)}k`} />
-                <YAxis type="category" dataKey="name" stroke="hsl(0 0% 50%)" fontSize={11} width={100} />
-                <Tooltip contentStyle={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px" }} formatter={(value: any) => formatCurrency(value)} />
+                <XAxis type="number" stroke="hsl(0 0% 50%)" fontSize={11} tickFormatter={(v) => `¥${(v / 10000).toFixed(0)}万`} />
+                <YAxis type="category" dataKey="name" stroke="hsl(0 0% 50%)" fontSize={10} width={120} />
+                <Tooltip
+                  contentStyle={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px" }}
+                  formatter={(value: any) => formatCurrency(value)}
+                />
                 <Legend />
-                <Bar dataKey="原価" stackId="a" fill="#f97316" />
-                <Bar dataKey="手数料" stackId="a" fill="#eab308" />
-                <Bar dataKey="広告費" stackId="a" fill="#ec4899" />
-                <Bar dataKey="純利益" stackId="a" fill="#22c55e" />
+                <Bar dataKey="利益" stackId="a" fill="#22c55e" radius={[0, 0, 0, 0]} />
+                <Bar dataKey="原価" stackId="a" fill="#ef4444" radius={[0, 0, 0, 0]} />
+                <Bar dataKey="楽天手数料" stackId="a" fill="#f59e0b" radius={[0, 0, 0, 0]} />
+                <Bar dataKey="広告費" stackId="a" fill="#8b5cf6" radius={[0, 4, 4, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </CardContent>
         </Card>
-      )}
 
+        {/* Profit Rate Comparison */}
+        <Card>
+          <CardHeader>
+            <CardTitle>商品別 利益率比較</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ResponsiveContainer width="100%" height={350}>
+              <BarChart data={profitRateData} layout="vertical" margin={{ left: 10 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="hsl(0 0% 20%)" />
+                <XAxis type="number" stroke="hsl(0 0% 50%)" fontSize={11} tickFormatter={(v) => `${v}%`} />
+                <YAxis type="category" dataKey="name" stroke="hsl(0 0% 50%)" fontSize={10} width={120} />
+                <Tooltip
+                  contentStyle={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px" }}
+                  formatter={(value: any, name: string) => name === "利益率" ? `${value}%` : formatCurrency(value)}
+                />
+                <ReferenceLine x={0} stroke="hsl(0 0% 40%)" />
+                <Bar dataKey="利益率" radius={[0, 4, 4, 0]}>
+                  {profitRateData.map((entry: any, i: number) => (
+                    <Cell key={i} fill={entry["利益率"] >= 0 ? "#22c55e" : "#ef4444"} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Sales Composition Pie + Monthly P&L */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 mt-6">
+        <Card>
+          <CardHeader>
+            <CardTitle>売上構成比</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ResponsiveContainer width="100%" height={300}>
+              <PieChart>
+                <Pie data={pieData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={60} outerRadius={100} paddingAngle={2}>
+                  {pieData.map((entry: any, i: number) => (
+                    <Cell key={i} fill={entry.color} />
+                  ))}
+                </Pie>
+                <Tooltip contentStyle={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px" }} formatter={(value: any) => formatCurrency(value)} />
+                <Legend />
+              </PieChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between">
+            <CardTitle>月間損益・広告効率</CardTitle>
+            <Select options={groupOptions} value={detailGroup} onChange={(e) => setDetailGroup(e.target.value)} className="w-48" />
+          </CardHeader>
+          <CardContent>
+            {detailGroup && bepData ? (
+              <div className="space-y-4">
+                {/* Sales progress */}
+                <div>
+                  <div className="flex justify-between text-xs mb-1">
+                    <span className="text-[hsl(var(--muted-foreground))]">売上 ({dayOfMonth}/{daysInMonth}日)</span>
+                    <span className="font-medium">{formatCurrency(bepData.totalSales)}{bepData.goal ? ` / ${formatCurrency(bepData.goal.target_sales)}` : ""}</span>
+                  </div>
+                  <div className="h-3 rounded-full bg-[hsl(var(--muted))] overflow-hidden">
+                    <div className="h-full rounded-full transition-all" style={{
+                      width: `${Math.min(100, bepData.goal?.target_sales ? (bepData.totalSales / bepData.goal.target_sales) * 100 : (dayOfMonth / daysInMonth) * 100)}%`,
+                      backgroundColor: getGroupColor(detailGroup, 0),
+                    }} />
+                  </div>
+                </div>
+
+                {/* Profit progress */}
+                {bepData.goal?.target_profit ? (
+                  <div>
+                    <div className="flex justify-between text-xs mb-1">
+                      <span className="text-[hsl(var(--muted-foreground))]">利益</span>
+                      <span className={`font-medium ${bepData.netProfit >= 0 ? "text-green-500" : "text-red-500"}`}>{formatCurrency(bepData.netProfit)} / {formatCurrency(bepData.goal.target_profit)}</span>
+                    </div>
+                    <div className="h-3 rounded-full bg-[hsl(var(--muted))] overflow-hidden">
+                      <div className="h-full rounded-full bg-green-500 transition-all" style={{ width: `${Math.min(100, Math.max(0, (bepData.netProfit / bepData.goal.target_profit) * 100))}%` }} />
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-xs text-[hsl(var(--muted-foreground))]">利益目標: <a href="/goals" className="text-[hsl(var(--primary))] underline">目標管理</a>で設定</p>
+                )}
+
+                {/* Break-even ACoS indicator */}
+                <div className="rounded-lg border border-[hsl(var(--border))] p-3">
+                  <p className="text-xs text-[hsl(var(--muted-foreground))] mb-2">損益分岐ACoS（限界利益率）</p>
+                  {bepData.breakEvenAcos > 0 ? (
+                    <div className="flex items-end gap-6">
+                      <div>
+                        <p className="text-xs text-[hsl(var(--muted-foreground))]">損益分岐</p>
+                        <p className="text-2xl font-bold">{formatPercent(bepData.breakEvenAcos)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-[hsl(var(--muted-foreground))]">今月ACoS</p>
+                        <p className={`text-2xl font-bold ${bepData.currentAcos > 0 && bepData.currentAcos < bepData.breakEvenAcos ? "text-green-500" : bepData.currentAcos >= bepData.breakEvenAcos ? "text-red-500" : ""}`}>
+                          {bepData.totalAdSales > 0 ? formatPercent(bepData.currentAcos) : "-"}
+                        </p>
+                      </div>
+                      <div className="flex-1 text-xs">
+                        {bepData.totalAdSales > 0 && bepData.currentAcos < bepData.breakEvenAcos ? (
+                          <p className="text-green-500">ACoSが損益分岐を下回っています。広告は黒字圏内です。</p>
+                        ) : bepData.totalAdSales > 0 && bepData.currentAcos >= bepData.breakEvenAcos ? (
+                          <p className="text-red-400">ACoSが損益分岐を超えています。広告費の見直しを検討してください。</p>
+                        ) : (
+                          <p className="text-[hsl(var(--muted-foreground))]">広告売上データがありません</p>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-red-400">粗利がマイナスです（原価・手数料を確認）</p>
+                  )}
+                  <div className="flex gap-4 mt-2 text-xs text-[hsl(var(--muted-foreground))]">
+                    <span>粗利/個: {formatCurrency(bepData.grossProfitPerUnit)}</span>
+                    <span>販売単価: {formatCurrency(bepData.sellingPrice)}</span>
+                    <span>広告費: {formatCurrency(bepData.totalAdSpend)}</span>
+                  </div>
+                </div>
+
+                {/* Month-end projection */}
+                <div className="rounded-lg border border-[hsl(var(--border))] p-3">
+                  <p className="text-xs text-[hsl(var(--muted-foreground))] mb-2">月末着地見込み（現在ペース）</p>
+                  <div className="grid grid-cols-3 gap-4">
+                    <div>
+                      <p className="text-xs text-[hsl(var(--muted-foreground))]">予想売上</p>
+                      <p className="text-xl font-bold">{formatCurrency(bepData.projectedSales)}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-[hsl(var(--muted-foreground))]">想定広告費</p>
+                      <p className="text-xl font-bold">{formatCurrency(bepData.projectedAdSpend)}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-[hsl(var(--muted-foreground))]">予想純利益</p>
+                      <p className={`text-xl font-bold ${bepData.projectedProfit >= 0 ? "text-green-500" : "text-red-500"}`}>
+                        {formatCurrency(bepData.projectedProfit)}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="flex h-48 items-center justify-center text-[hsl(var(--muted-foreground))]">
+                グループを選択してください
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Metrics Chart with Tabs */}
       <Card className="mt-6">
-        <CardHeader><CardTitle>商品別損益テーブル</CardTitle></CardHeader>
-        <CardContent className="p-0">
+        <CardHeader className="flex flex-row items-center justify-between">
+          <CardTitle>商品グループ別メトリクス</CardTitle>
+          <div className="flex rounded-lg border border-[hsl(var(--border))] overflow-hidden">
+            {[
+              { value: "access", label: "アクセス数" },
+              { value: "cvr", label: "CVR" },
+              { value: "sales", label: "売上" },
+              { value: "profit", label: "利益" },
+            ].map(tab => (
+              <button
+                key={tab.value}
+                onClick={() => setMetricsTab(tab.value)}
+                className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+                  metricsTab === tab.value
+                    ? "bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))]"
+                    : "bg-transparent text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]"
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+        </CardHeader>
+        <CardContent>
+          {metricsChartData.data.length > 0 ? (
+            <ResponsiveContainer width="100%" height={350}>
+              <LineChart data={metricsChartData.data}>
+                <CartesianGrid strokeDasharray="3 3" stroke="hsl(0 0% 20%)" />
+                <XAxis dataKey="date" stroke="hsl(0 0% 50%)" fontSize={12} />
+                <YAxis
+                  stroke="hsl(0 0% 50%)"
+                  fontSize={12}
+                  tickFormatter={
+                    metricsTab === "sales" || metricsTab === "profit"
+                      ? (v) => `¥${(v / 10000).toFixed(0)}万`
+                      : metricsTab === "cvr"
+                      ? (v) => `${v}%`
+                      : undefined
+                  }
+                />
+                <Tooltip
+                  contentStyle={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px" }}
+                  formatter={(value: any) =>
+                    metricsTab === "sales" || metricsTab === "profit"
+                      ? formatCurrency(value)
+                      : metricsTab === "cvr"
+                      ? `${value}%`
+                      : formatNumber(value)
+                  }
+                />
+                <Legend />
+                {metricsChartData.groups.map((name: string, i: number) => (
+                  <Line
+                    key={name}
+                    type="monotone"
+                    dataKey={name}
+                    stroke={getGroupColor(name, i)}
+                    strokeWidth={2}
+                    dot={{ r: 3 }}
+                    connectNulls
+                  />
+                ))}
+              </LineChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="flex h-[350px] items-center justify-center text-[hsl(var(--muted-foreground))]">データがありません</div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Group Detail Analysis with Last Month Comparison */}
+      <Card className="mt-6">
+        <CardHeader className="flex flex-row items-center justify-between">
+          <CardTitle>商品グループ詳細分析</CardTitle>
+          <div className="flex items-center gap-2">
+            <div className="flex rounded-lg border border-[hsl(var(--border))] overflow-hidden">
+              <button onClick={() => setDetailPeriod("current")} className={`px-3 py-1.5 text-xs font-medium transition-colors ${detailPeriod === "current" ? "bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))]" : "bg-transparent text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]"}`}>今月</button>
+              <button onClick={() => setDetailPeriod("compare")} className={`px-3 py-1.5 text-xs font-medium transition-colors ${detailPeriod === "compare" ? "bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))]" : "bg-transparent text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]"}`}>先月比較</button>
+            </div>
+            <Select options={groupOptions} value={detailGroup} onChange={(e) => setDetailGroup(e.target.value)} className="w-48" />
+          </div>
+        </CardHeader>
+        <CardContent>
+          {detailGroup && detailChartData.length > 0 ? (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Access + CVR composite */}
+              <div>
+                <p className="text-xs text-[hsl(var(--muted-foreground))] mb-2 font-medium">アクセス数 × CVR{detailPeriod === "compare" ? " (実線=今月 / 破線=先月)" : ""}</p>
+                <ResponsiveContainer width="100%" height={220}>
+                  <ComposedChart data={detailPeriod === "compare"
+                    ? detailChartData.map((d, i) => ({ ...d, "先月アクセス": lastMonthChartData[i]?.アクセス, "先月CVR": lastMonthChartData[i]?.CVR }))
+                    : detailChartData
+                  }>
+                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(0 0% 20%)" />
+                    <XAxis dataKey="date" stroke="hsl(0 0% 50%)" fontSize={10} />
+                    <YAxis yAxisId="left" stroke="hsl(0 0% 50%)" fontSize={10} />
+                    <YAxis yAxisId="right" orientation="right" stroke="hsl(0 0% 40%)" fontSize={10} tickFormatter={(v) => `${v}%`} />
+                    <Tooltip
+                      contentStyle={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px" }}
+                      formatter={(value: any, name: string) => name.includes("CVR") ? `${value}%` : formatNumber(value)}
+                      content={({ active, payload, label }) => {
+                        if (!active || !payload?.length) return null;
+                        const entry = payload[0]?.payload;
+                        const evts = entry?.events || [];
+                        return (
+                          <div style={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px", padding: "8px 12px", fontSize: "12px" }}>
+                            <p style={{ fontWeight: "bold", marginBottom: 4 }}>{label}</p>
+                            {payload.map((p: any, i: number) => (
+                              <p key={i} style={{ color: p.color }}>{p.name}: {p.name.includes("CVR") ? `${p.value}%` : formatNumber(p.value)}</p>
+                            ))}
+                            {evts.length > 0 && (
+                              <div style={{ borderTop: "1px solid hsl(0 0% 25%)", marginTop: 6, paddingTop: 6 }}>
+                                {evts.map((ev: any, i: number) => (
+                                  <p key={i} style={{ color: "#f59e0b" }}>📌 [{EVENT_TYPE_LABELS[ev.event_type] || ev.event_type}] {ev.memo || ""}</p>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      }}
+                    />
+                    <Legend />
+                    {/* Event markers as ReferenceLines */}
+                    {detailChartData.filter((d: any) => d.events?.length > 0).map((d: any) => (
+                      <ReferenceLine key={`ev-${d.date}`} x={d.date} yAxisId="left" stroke="#f59e0b" strokeDasharray="3 3" strokeWidth={1.5} label={{ value: "📌", position: "top", fontSize: 12 }} />
+                    ))}
+                    <Bar yAxisId="left" dataKey="アクセス" fill={getGroupColor(detailGroup, 0)} opacity={0.7} radius={[3, 3, 0, 0]} />
+                    <Line yAxisId="right" type="monotone" dataKey="CVR" stroke="#f59e0b" strokeWidth={2} dot={{ r: 2 }} />
+                    {detailPeriod === "compare" && <>
+                      <Bar yAxisId="left" dataKey="先月アクセス" fill="hsl(0 0% 40%)" opacity={0.3} radius={[3, 3, 0, 0]} />
+                      <Line yAxisId="right" type="monotone" dataKey="先月CVR" stroke="#f59e0b" strokeWidth={1.5} strokeDasharray="5 3" dot={false} />
+                    </>}
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
+
+              {/* Sales + Profit composite */}
+              <div>
+                <p className="text-xs text-[hsl(var(--muted-foreground))] mb-2 font-medium">売上 × 利益{detailPeriod === "compare" ? " (実線=今月 / 破線=先月)" : ""}</p>
+                <ResponsiveContainer width="100%" height={220}>
+                  <ComposedChart data={detailPeriod === "compare"
+                    ? detailChartData.map((d, i) => ({ ...d, "先月売上": lastMonthChartData[i]?.売上, "先月利益": lastMonthChartData[i]?.利益 }))
+                    : detailChartData
+                  }>
+                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(0 0% 20%)" />
+                    <XAxis dataKey="date" stroke="hsl(0 0% 50%)" fontSize={10} />
+                    <YAxis stroke="hsl(0 0% 50%)" fontSize={10} tickFormatter={(v) => `¥${(v / 10000).toFixed(0)}万`} />
+                    <Tooltip
+                      contentStyle={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px" }}
+                      content={({ active, payload, label }) => {
+                        if (!active || !payload?.length) return null;
+                        const entry = payload[0]?.payload;
+                        const evts = entry?.events || [];
+                        return (
+                          <div style={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px", padding: "8px 12px", fontSize: "12px" }}>
+                            <p style={{ fontWeight: "bold", marginBottom: 4 }}>{label}</p>
+                            {payload.map((p: any, i: number) => (
+                              <p key={i} style={{ color: p.color }}>{p.name}: {formatCurrency(p.value)}</p>
+                            ))}
+                            {evts.length > 0 && (
+                              <div style={{ borderTop: "1px solid hsl(0 0% 25%)", marginTop: 6, paddingTop: 6 }}>
+                                {evts.map((ev: any, i: number) => (
+                                  <p key={i} style={{ color: "#f59e0b" }}>📌 [{EVENT_TYPE_LABELS[ev.event_type] || ev.event_type}] {ev.memo || ""}</p>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      }}
+                    />
+                    <Legend />
+                    {detailChartData.filter((d: any) => d.events?.length > 0).map((d: any) => (
+                      <ReferenceLine key={`ev2-${d.date}`} x={d.date} stroke="#f59e0b" strokeDasharray="3 3" strokeWidth={1.5} label={{ value: "📌", position: "top", fontSize: 12 }} />
+                    ))}
+                    <Bar dataKey="売上" fill={getGroupColor(detailGroup, 0)} opacity={0.7} radius={[3, 3, 0, 0]} />
+                    <Line type="monotone" dataKey="利益" stroke="#22c55e" strokeWidth={2} dot={{ r: 2 }} />
+                    {detailPeriod === "compare" && <>
+                      <Bar dataKey="先月売上" fill="hsl(0 0% 40%)" opacity={0.3} radius={[3, 3, 0, 0]} />
+                      <Line type="monotone" dataKey="先月利益" stroke="#22c55e" strokeWidth={1.5} strokeDasharray="5 3" dot={false} />
+                    </>}
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
+
+              {/* Orders trend */}
+              <div className="lg:col-span-2">
+                <p className="text-xs text-[hsl(var(--muted-foreground))] mb-2 font-medium">注文数推移{detailPeriod === "compare" ? " (色付き=今月 / グレー=先月)" : ""}</p>
+                <ResponsiveContainer width="100%" height={180}>
+                  <BarChart data={detailPeriod === "compare"
+                    ? detailChartData.map((d, i) => ({ ...d, "先月注文数": lastMonthChartData[i]?.注文数 }))
+                    : detailChartData
+                  }>
+                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(0 0% 20%)" />
+                    <XAxis dataKey="date" stroke="hsl(0 0% 50%)" fontSize={10} />
+                    <YAxis stroke="hsl(0 0% 50%)" fontSize={10} />
+                    <Tooltip
+                      contentStyle={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px" }}
+                      content={({ active, payload, label }) => {
+                        if (!active || !payload?.length) return null;
+                        const entry = payload[0]?.payload;
+                        const evts = entry?.events || [];
+                        return (
+                          <div style={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px", padding: "8px 12px", fontSize: "12px" }}>
+                            <p style={{ fontWeight: "bold", marginBottom: 4 }}>{label}</p>
+                            {payload.map((p: any, i: number) => (
+                              <p key={i} style={{ color: p.color }}>{p.name}: {p.value}件</p>
+                            ))}
+                            {evts.length > 0 && (
+                              <div style={{ borderTop: "1px solid hsl(0 0% 25%)", marginTop: 6, paddingTop: 6 }}>
+                                {evts.map((ev: any, i: number) => (
+                                  <p key={i} style={{ color: "#f59e0b" }}>📌 [{EVENT_TYPE_LABELS[ev.event_type] || ev.event_type}] {ev.memo || ""}</p>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      }}
+                    />
+                    <Legend />
+                    {detailChartData.filter((d: any) => d.events?.length > 0).map((d: any) => (
+                      <ReferenceLine key={`ev3-${d.date}`} x={d.date} stroke="#f59e0b" strokeDasharray="3 3" strokeWidth={1.5} label={{ value: "📌", position: "top", fontSize: 12 }} />
+                    ))}
+                    <Bar dataKey="注文数" fill={getGroupColor(detailGroup, 0)} radius={[3, 3, 0, 0]} />
+                    {detailPeriod === "compare" && <Bar dataKey="先月注文数" fill="hsl(0 0% 40%)" opacity={0.4} radius={[3, 3, 0, 0]} />}
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          ) : (
+            <div className="flex h-48 items-center justify-center text-[hsl(var(--muted-foreground))]">
+              グループを選択してください
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Detailed Product Table */}
+      <Card className="mt-6">
+        <CardHeader className="flex flex-row items-center justify-between">
+          <CardTitle>商品別損益テーブル</CardTitle>
+          <div className="flex items-center gap-2">
+            <Select options={sortOptions} value={sortKey} onChange={(e) => setSortKey(e.target.value)} className="w-36" />
+          </div>
+        </CardHeader>
+        <CardContent className="p-0 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>商品名</TableHead>
+                <TableHead className="min-w-[200px]">{viewMode === "grouped" ? "商品グループ" : "商品名"}</TableHead>
                 <TableHead className="text-right">売上</TableHead>
-                <TableHead className="text-right">注文数</TableHead>
+                <TableHead className="text-right">注文</TableHead>
                 <TableHead className="text-right">原価</TableHead>
-                <TableHead className="text-right">手数料</TableHead>
+                <TableHead className="text-right">楽天手数料</TableHead>
                 <TableHead className="text-right">広告費</TableHead>
+                <TableHead className="text-right">粗利</TableHead>
                 <TableHead className="text-right">純利益</TableHead>
                 <TableHead className="text-right">利益率</TableHead>
-                <TableHead className="text-right">個あたり利益</TableHead>
+                <TableHead className="text-right">アクセス</TableHead>
+                <TableHead className="text-right">CVR</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {sorted.map((p: any, i: number) => (
-                <TableRow key={i}>
-                  <TableCell className="font-medium max-w-[200px] truncate">{p.product?.name || "不明"}</TableCell>
-                  <TableCell className="text-right text-red-500">{formatCurrency(p.total_sales)}</TableCell>
-                  <TableCell className="text-right">{formatNumber(p.total_orders)}</TableCell>
-                  <TableCell className="text-right">{formatCurrency(p.total_cost || 0)}</TableCell>
-                  <TableCell className="text-right">{formatCurrency(p.total_fee || 0)}</TableCell>
-                  <TableCell className="text-right">{formatCurrency(p.total_ad_spend || 0)}</TableCell>
-                  <TableCell className={`text-right font-medium ${(p.net_profit || 0) >= 0 ? "text-[hsl(var(--success))]" : "text-[hsl(var(--destructive))]"}`}>
-                    {formatCurrency(p.net_profit || 0)}
-                  </TableCell>
-                  <TableCell className={`text-right ${(p.profit_rate || 0) >= 20 ? "text-[hsl(var(--success))]" : (p.profit_rate || 0) >= 10 ? "" : "text-[hsl(var(--warning))]"}`}>
-                    {formatPercent(p.profit_rate || 0)}
-                  </TableCell>
-                  <TableCell className="text-right">{formatCurrency(p.unit_profit || 0)}</TableCell>
-                </TableRow>
-              ))}
-              {sorted.length > 0 && (
-                <TableRow className="bg-[hsl(var(--muted))] font-bold">
+              {viewMode === "grouped" ? (
+                <>
+                  {groupedProducts.map((g: GroupedProduct, gi: number) => (
+                    <>
+                      {/* Group header row */}
+                      <TableRow
+                        key={`group-${gi}`}
+                        className="cursor-pointer hover:bg-[hsl(var(--muted))] transition-colors"
+                        onClick={() => toggleGroup(g.groupKey)}
+                      >
+                        <TableCell className="font-bold text-sm">
+                          <span className="mr-2 inline-block w-4 text-center text-[hsl(var(--muted-foreground))]">
+                            {expandedGroups.has(g.groupKey) ? "▼" : "▶"}
+                          </span>
+                          {g.groupName}
+                          <span className="ml-2 text-xs text-[hsl(var(--muted-foreground))]">({g.children.length}件)</span>
+                        </TableCell>
+                        <TableCell className="text-right font-bold text-[hsl(var(--primary))]">{formatCurrency(g.total_sales)}</TableCell>
+                        <TableCell className="text-right font-bold">{formatNumber(g.total_orders)}</TableCell>
+                        <TableCell className="text-right font-bold text-red-400">{formatCurrency(g.total_cost)}</TableCell>
+                        <TableCell className="text-right font-bold text-yellow-400">{formatCurrency(g.total_fee)}</TableCell>
+                        <TableCell className="text-right font-bold text-purple-400">{formatCurrency(g.total_ad_spend)}</TableCell>
+                        <TableCell className="text-right font-bold">{formatCurrency(g.gross_profit)}</TableCell>
+                        <TableCell className={`text-right font-bold ${g.net_profit >= 0 ? "text-green-500" : "text-red-500"}`}>
+                          {formatCurrency(g.net_profit)}
+                        </TableCell>
+                        <TableCell className={`text-right font-bold ${g.profit_rate >= 0 ? "text-green-500" : "text-red-500"}`}>
+                          {formatPercent(g.profit_rate)}
+                        </TableCell>
+                        <TableCell className="text-right font-bold">{formatNumber(g.total_access)}</TableCell>
+                        <TableCell className="text-right font-bold">
+                          {g.total_access > 0 && g.total_access >= g.total_orders * 0.5 ? formatPercent((g.total_orders / g.total_access) * 100) : "-"}
+                        </TableCell>
+                      </TableRow>
+                      {/* Expanded children rows */}
+                      {expandedGroups.has(g.groupKey) && g.children
+                        .sort((a: any, b: any) => b.total_sales - a.total_sales)
+                        .map((p: any, ci: number) => (
+                        <TableRow key={`child-${gi}-${ci}`} className="bg-[hsl(var(--muted)/0.3)]">
+                          <TableCell className="text-sm max-w-[300px] truncate pl-10" title={p.product?.name}>
+                            <span className="text-[hsl(var(--muted-foreground))]">└</span>{" "}
+                            {p.product?.name || "不明"}
+                          </TableCell>
+                          <TableCell className="text-right text-[hsl(var(--primary))]">{formatCurrency(p.total_sales)}</TableCell>
+                          <TableCell className="text-right">{formatNumber(p.total_orders)}</TableCell>
+                          <TableCell className="text-right text-red-400">{formatCurrency(p.total_cost || 0)}</TableCell>
+                          <TableCell className="text-right text-yellow-400">{formatCurrency(p.total_fee || 0)}</TableCell>
+                          <TableCell className="text-right text-purple-400">{formatCurrency(p.total_ad_spend || 0)}</TableCell>
+                          <TableCell className="text-right">{formatCurrency(p.gross_profit || 0)}</TableCell>
+                          <TableCell className={`text-right ${(p.net_profit || 0) >= 0 ? "text-green-500" : "text-red-500"}`}>
+                            {formatCurrency(p.net_profit || 0)}
+                          </TableCell>
+                          <TableCell className={`text-right ${(p.profit_rate || 0) >= 0 ? "text-green-500" : "text-red-500"}`}>
+                            {formatPercent(p.profit_rate || 0)}
+                          </TableCell>
+                          <TableCell className="text-right">{formatNumber(p.total_access || 0)}</TableCell>
+                          <TableCell className="text-right">
+                            {(p.total_access || 0) > 0 && (p.total_access || 0) >= (p.total_orders || 0) * 0.5 ? formatPercent(((p.total_orders || 0) / p.total_access) * 100) : "-"}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </>
+                  ))}
+                </>
+              ) : (
+                <>
+                  {sortedProducts.map((p: any, i: number) => (
+                    <TableRow key={i}>
+                      <TableCell className="font-medium text-sm max-w-[300px] truncate" title={p.product?.name}>
+                        {p.product?.name || "不明"}
+                      </TableCell>
+                      <TableCell className="text-right text-[hsl(var(--primary))]">{formatCurrency(p.total_sales)}</TableCell>
+                      <TableCell className="text-right">{formatNumber(p.total_orders)}</TableCell>
+                      <TableCell className="text-right text-red-400">{formatCurrency(p.total_cost || 0)}</TableCell>
+                      <TableCell className="text-right text-yellow-400">{formatCurrency(p.total_fee || 0)}</TableCell>
+                      <TableCell className="text-right text-purple-400">{formatCurrency(p.total_ad_spend || 0)}</TableCell>
+                      <TableCell className="text-right">{formatCurrency(p.gross_profit || 0)}</TableCell>
+                      <TableCell className={`text-right font-bold ${(p.net_profit || 0) >= 0 ? "text-green-500" : "text-red-500"}`}>
+                        {formatCurrency(p.net_profit || 0)}
+                      </TableCell>
+                      <TableCell className={`text-right ${(p.profit_rate || 0) >= 0 ? "text-green-500" : "text-red-500"}`}>
+                        {formatPercent(p.profit_rate || 0)}
+                      </TableCell>
+                      <TableCell className="text-right">{formatNumber(p.total_access || 0)}</TableCell>
+                      <TableCell className="text-right">
+                        {(p.total_access || 0) > 0 && (p.total_access || 0) >= (p.total_orders || 0) * 0.5 ? formatPercent(((p.total_orders || 0) / p.total_access) * 100) : "-"}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </>
+              )}
+              {/* Total row */}
+              {sortedProducts.length > 0 && (
+                <TableRow className="border-t-2 border-[hsl(var(--border))] font-bold bg-[hsl(var(--muted))]">
                   <TableCell>合計</TableCell>
-                  <TableCell className="text-right">{formatCurrency(totalSales)}</TableCell>
-                  <TableCell className="text-right">{formatNumber(sorted.reduce((s: number, p: any) => s + p.total_orders, 0))}</TableCell>
-                  <TableCell className="text-right">{formatCurrency(totalCost)}</TableCell>
-                  <TableCell className="text-right">{formatCurrency(totalFee)}</TableCell>
-                  <TableCell className="text-right">{formatCurrency(totalAdSpend)}</TableCell>
-                  <TableCell className={`text-right ${totalProfit >= 0 ? "text-[hsl(var(--success))]" : "text-[hsl(var(--destructive))]"}`}>{formatCurrency(totalProfit)}</TableCell>
-                  <TableCell className="text-right">{formatPercent(profitRate)}</TableCell>
-                  <TableCell className="text-right">-</TableCell>
+                  <TableCell className="text-right text-[hsl(var(--primary))]">{formatCurrency(totalSales)}</TableCell>
+                  <TableCell className="text-right">{formatNumber(totalOrders)}</TableCell>
+                  <TableCell className="text-right text-red-400">{formatCurrency(totalCost)}</TableCell>
+                  <TableCell className="text-right text-yellow-400">{formatCurrency(totalFee)}</TableCell>
+                  <TableCell className="text-right text-purple-400">{formatCurrency(totalAdSpend)}</TableCell>
+                  <TableCell className="text-right">{formatCurrency(totalSales - totalCost - totalFee)}</TableCell>
+                  <TableCell className={`text-right ${totalProfit >= 0 ? "text-green-500" : "text-red-500"}`}>{formatCurrency(totalProfit)}</TableCell>
+                  <TableCell className={`text-right ${overallProfitRate >= 0 ? "text-green-500" : "text-red-500"}`}>{formatPercent(overallProfitRate)}</TableCell>
+                  <TableCell className="text-right">
+                    {formatNumber(sortedProducts.reduce((s: number, p: any) => s + (p.total_access || 0), 0))}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    {(() => { const ta = sortedProducts.reduce((s: number, p: any) => s + (p.total_access || 0), 0); const to = sortedProducts.reduce((s: number, p: any) => s + p.total_orders, 0); return ta > 0 && ta >= to * 0.5 ? formatPercent((to / ta) * 100) : "-"; })()}
+                  </TableCell>
                 </TableRow>
               )}
             </TableBody>
           </Table>
+        </CardContent>
+      </Card>
+
+      {/* AI Consultant Panel */}
+      <Card className="mt-6">
+        <CardHeader className="flex flex-row items-center justify-between">
+          <CardTitle>AI コンサルタント</CardTitle>
+          <div className="flex items-center gap-2">
+            <Select options={groupOptions} value={detailGroup} onChange={(e) => setDetailGroup(e.target.value)} className="w-48" />
+            {detailGroup && (
+              <Button
+                size="sm"
+                onClick={() => {
+                  setAiOpen(true);
+                  if (aiMessages.length === 0) {
+                    sendAiMessage(`「${detailGroup}」の楽天市場における今月のデータを分析し、現状サマリー・課題・施策提案をレポートしてください。`);
+                  }
+                }}
+                disabled={!detailGroup}
+              >
+                {aiMessages.length > 0 ? "チャットを開く" : "AIに分析させる"}
+              </Button>
+            )}
+          </div>
+        </CardHeader>
+        <CardContent>
+          {!detailGroup ? (
+            <p className="text-sm text-[hsl(var(--muted-foreground))] text-center py-8">商品グループを選択して「AIに分析させる」を押してください</p>
+          ) : !aiOpen ? (
+            <p className="text-sm text-[hsl(var(--muted-foreground))] text-center py-8">「AIに分析させる」ボタンでAIコンサルタントが今月のデータを元に分析・提案します</p>
+          ) : (
+            <div>
+              {/* Chat messages */}
+              <div ref={aiScrollRef} className="max-h-[500px] overflow-y-auto space-y-3 mb-4 pr-1">
+                {aiMessages.map((msg, i) => (
+                  <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+                    <div className={`max-w-[85%] rounded-lg px-4 py-2.5 text-sm ${
+                      msg.role === "user"
+                        ? "bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))]"
+                        : "bg-[hsl(var(--muted))]"
+                    }`}>
+                      {msg.role === "assistant" ? (
+                        <div className="whitespace-pre-wrap leading-relaxed">{msg.content || (aiLoading && i === aiMessages.length - 1 ? "考え中..." : "")}</div>
+                      ) : (
+                        <div>{msg.content}</div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Input */}
+              <form
+                onSubmit={(e) => { e.preventDefault(); sendAiMessage(); }}
+                className="flex gap-2"
+              >
+                <Input
+                  value={aiInput}
+                  onChange={(e) => setAiInput(e.target.value)}
+                  placeholder="質問を入力... 例: 広告費を削減すべき？ / CVR改善の施策は？"
+                  disabled={aiLoading}
+                  className="flex-1"
+                />
+                <Button type="submit" disabled={aiLoading || !aiInput.trim()} size="sm">
+                  送信
+                </Button>
+              </form>
+
+              {/* Quick action buttons */}
+              {aiMessages.length > 0 && !aiLoading && (
+                <div className="flex flex-wrap gap-1.5 mt-3">
+                  {[
+                    "広告費を減らすべきですか？",
+                    "CVRを上げる施策を提案して",
+                    "楽天スーパーSALEの準備は？",
+                    "来月の目標はいくらが妥当？",
+                  ].map((q) => (
+                    <button
+                      key={q}
+                      className="text-xs px-2.5 py-1.5 rounded-full border border-[hsl(var(--border))] text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))] transition-colors"
+                      onClick={() => sendAiMessage(q)}
+                    >
+                      {q}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

@@ -1,101 +1,37 @@
 "use client";
-import { useState, useCallback, useRef } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { PageHeader } from "@/components/layout/page-header";
 import { PeriodFilter } from "@/components/layout/period-filter";
 import { KPICard } from "@/components/layout/kpi-card";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatCurrency, formatPercent, formatNumber, getDateRange } from "@/lib/utils";
-import { getRakutenDailyAdvertising, getRakutenAdSummary } from "@/lib/api/rakuten-advertising";
+import { supabase } from "@/lib/supabase";
 import { getRakutenProductSalesSummary } from "@/lib/api/rakuten-sales";
-import { Megaphone, DollarSign, MousePointerClick, TrendingUp, Upload, CheckCircle, AlertCircle, Loader2 } from "lucide-react";
+import { Megaphone, DollarSign, MousePointerClick, TrendingUp } from "lucide-react";
 import { Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ComposedChart } from "recharts";
+import { CHART_COLORS } from "@/lib/constants";
 
-const RAKUTEN_RED = "#bf0000";
-
-function CsvUploadArea({ onSuccess }: { onSuccess: () => void }) {
-  const [dragOver, setDragOver] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
-
-  const handleFile = useCallback(async (file: File) => {
-    setUploading(true);
-    setResult(null);
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-      const res = await fetch("/api/rakuten/advertising", { method: "POST", body: formData });
-      const json = await res.json();
-      setResult({ ok: json.success, message: json.message });
-      if (json.success) onSuccess();
-    } catch (e) {
-      setResult({ ok: false, message: "アップロードに失敗しました" });
-    } finally {
-      setUploading(false);
-    }
-  }, [onSuccess]);
-
-  const onDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setDragOver(false);
-    const file = e.dataTransfer.files[0];
-    if (file && (file.name.endsWith(".csv") || file.type === "text/csv")) handleFile(file);
-    else setResult({ ok: false, message: "CSVファイルをドロップしてください" });
-  }, [handleFile]);
-
-  const onFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) handleFile(file);
-  }, [handleFile]);
-
-  return (
-    <div
-      onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-      onDragLeave={() => setDragOver(false)}
-      onDrop={onDrop}
-      onClick={() => fileRef.current?.click()}
-      className={`relative cursor-pointer rounded-lg border-2 border-dashed p-4 text-center transition-colors ${
-        dragOver
-          ? "border-[hsl(var(--primary))] bg-[hsl(var(--primary)/0.05)]"
-          : "border-[hsl(0_0%_25%)] hover:border-[hsl(0_0%_40%)]"
-      }`}
-    >
-      <input ref={fileRef} type="file" accept=".csv" className="hidden" onChange={onFileSelect} />
-      {uploading ? (
-        <div className="flex items-center justify-center gap-2 text-sm text-[hsl(0_0%_60%)]">
-          <Loader2 className="h-4 w-4 animate-spin" />
-          <span>アップロード中...</span>
-        </div>
-      ) : result ? (
-        <div className={`flex items-center justify-center gap-2 text-sm ${result.ok ? "text-[hsl(var(--success))]" : "text-[hsl(var(--warning))]"}`}>
-          {result.ok ? <CheckCircle className="h-4 w-4" /> : <AlertCircle className="h-4 w-4" />}
-          <span>{result.message}</span>
-        </div>
-      ) : (
-        <div className="flex items-center justify-center gap-2 text-sm text-[hsl(0_0%_60%)]">
-          <Upload className="h-4 w-4" />
-          <span>RPPレポートCSVをドラッグ＆ドロップ（またはクリックして選択）</span>
-        </div>
-      )}
-    </div>
-  );
+async function getRakutenAdData(params: { startDate?: string; endDate?: string }) {
+  let query = supabase
+    .from("rakuten_daily_advertising")
+    .select("*, rakuten_product:rakuten_products(*)")
+    .order("date", { ascending: false });
+  if (params.startDate) query = query.gte("date", params.startDate);
+  if (params.endDate) query = query.lte("date", params.endDate);
+  const { data, error } = await query;
+  if (error) { console.warn("getRakutenAdData error:", error); return []; }
+  return data || [];
 }
 
 export default function RakutenRppPage() {
   const [period, setPeriod] = useState("30days");
   const dateRange = getDateRange(period);
-  const queryClient = useQueryClient();
 
   const { data: adData = [] } = useQuery({
-    queryKey: ["rakutenAdvertising", dateRange],
-    queryFn: () => getRakutenDailyAdvertising(dateRange),
-  });
-
-  const { data: adSummary } = useQuery({
-    queryKey: ["rakutenAdSummary", dateRange],
-    queryFn: () => getRakutenAdSummary(dateRange),
+    queryKey: ["rakutenAd", dateRange],
+    queryFn: () => getRakutenAdData(dateRange),
   });
 
   const { data: productSummary = [] } = useQuery({
@@ -104,22 +40,23 @@ export default function RakutenRppPage() {
   });
 
   const totalSales = (productSummary as any[]).reduce((s: number, p: any) => s + p.total_sales, 0);
-  const totalAdSpend = adSummary?.total_ad_spend || 0;
-  const totalAdSales = adSummary?.total_ad_sales || 0;
-  const totalClicks = adSummary?.total_clicks || 0;
-  const totalImpressions = adSummary?.total_impressions || 0;
+  const totalAdSpend = (adData as any[]).reduce((s: number, r: any) => s + (r.ad_spend || 0), 0);
+  const totalAdSales = (adData as any[]).reduce((s: number, r: any) => s + (r.ad_sales || 0), 0);
+  const totalClicks = (adData as any[]).reduce((s: number, r: any) => s + (r.clicks || 0), 0);
+  const totalImpressions = (adData as any[]).reduce((s: number, r: any) => s + (r.impressions || 0), 0);
   const avgAcos = totalAdSales > 0 ? (totalAdSpend / totalAdSales) * 100 : 0;
-  const roas = totalAdSpend > 0 ? totalAdSales / totalAdSpend : 0;
+  const roas = totalAdSpend > 0 ? (totalAdSales / totalAdSpend) * 100 : 0;
   const tacos = totalSales > 0 ? (totalAdSpend / totalSales) * 100 : 0;
   const ctr = totalImpressions > 0 ? (totalClicks / totalImpressions) * 100 : 0;
 
+  // Aggregate by date
   const dailyAgg = (adData as any[]).reduce((acc: Record<string, any>, row: any) => {
     const d = row.date;
     if (!acc[d]) acc[d] = { date: d, ad_spend: 0, ad_sales: 0, clicks: 0, impressions: 0 };
-    acc[d].ad_spend += row.ad_spend;
-    acc[d].ad_sales += row.ad_sales;
-    acc[d].clicks += row.clicks;
-    acc[d].impressions += row.impressions;
+    acc[d].ad_spend += row.ad_spend || 0;
+    acc[d].ad_sales += row.ad_sales || 0;
+    acc[d].clicks += row.clicks || 0;
+    acc[d].impressions += row.impressions || 0;
     return acc;
   }, {});
 
@@ -127,45 +64,43 @@ export default function RakutenRppPage() {
     .sort((a: any, b: any) => a.date.localeCompare(b.date))
     .map((d: any) => ({
       date: d.date.slice(5),
-      RPP広告費: d.ad_spend,
-      RPP広告売上: d.ad_sales,
+      広告費: d.ad_spend,
+      広告売上: d.ad_sales,
       ACOS: d.ad_sales > 0 ? ((d.ad_spend / d.ad_sales) * 100).toFixed(1) : 0,
     }));
 
-  const productAgg = (adData as any[]).reduce((acc: Record<string, any>, row: any) => {
-    const pid = row.product_id;
-    if (!acc[pid]) acc[pid] = { product: row.rakuten_product, ad_spend: 0, ad_sales: 0, clicks: 0, impressions: 0 };
-    acc[pid].ad_spend += row.ad_spend;
-    acc[pid].ad_sales += row.ad_sales;
-    acc[pid].clicks += row.clicks;
-    acc[pid].impressions += row.impressions;
+  // Aggregate by product_group
+  const groupAgg = (adData as any[]).reduce((acc: Record<string, any>, row: any) => {
+    const group = row.rakuten_product?.product_group || row.rakuten_product?.name || "未分類";
+    if (!acc[group]) acc[group] = { group, ad_spend: 0, ad_sales: 0, ad_orders: 0, clicks: 0, impressions: 0, productIds: new Set<string>() };
+    acc[group].ad_spend += row.ad_spend || 0;
+    acc[group].ad_sales += row.ad_sales || 0;
+    acc[group].ad_orders += row.ad_orders || 0;
+    acc[group].clicks += row.clicks || 0;
+    acc[group].impressions += row.impressions || 0;
+    if (row.product_id) acc[group].productIds.add(row.product_id);
     return acc;
   }, {});
 
-  const productAdData = Object.values(productAgg).sort((a: any, b: any) => b.ad_spend - a.ad_spend);
+  const groupAdData = Object.values(groupAgg).sort((a: any, b: any) => b.ad_spend - a.ad_spend);
 
   return (
     <div>
-      <PageHeader title="🔴 楽天 RPP広告管理" description="RPP広告パフォーマンス分析">
+      <PageHeader title="【楽天】RPP広告管理" description="楽天RPP広告の分析">
         <PeriodFilter value={period} onChange={setPeriod} />
       </PageHeader>
 
-      <CsvUploadArea onSuccess={() => {
-        queryClient.invalidateQueries({ queryKey: ["rakutenAdvertising"] });
-        queryClient.invalidateQueries({ queryKey: ["rakutenAdSummary"] });
-      }} />
-
-      <div className="mt-4 grid grid-cols-2 gap-4 md:grid-cols-4 lg:grid-cols-6">
-        <KPICard title="RPP広告費" value={formatCurrency(totalAdSpend)} icon={Megaphone} />
-        <KPICard title="RPP広告売上" value={formatCurrency(totalAdSales)} icon={DollarSign} />
-        <KPICard title="ACOS" value={formatPercent(avgAcos)} icon={TrendingUp} valueClassName={avgAcos < 30 ? "text-[hsl(var(--success))]" : "text-[hsl(var(--warning))]"} />
-        <KPICard title="ROAS" value={`${roas.toFixed(2)}x`} icon={TrendingUp} valueClassName={roas > 3 ? "text-[hsl(var(--success))]" : ""} />
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6">
+        <KPICard title="広告費合計" value={formatCurrency(totalAdSpend)} icon={Megaphone} />
+        <KPICard title="広告売上" value={formatCurrency(totalAdSales)} icon={DollarSign} />
+        <KPICard title="ROAS" value={formatPercent(roas)} icon={TrendingUp} valueClassName={roas > 300 ? "text-[hsl(var(--success))]" : ""} />
+        <KPICard title="ACoS" value={formatPercent(avgAcos)} icon={TrendingUp} valueClassName={avgAcos < 30 ? "text-[hsl(var(--success))]" : "text-[hsl(var(--warning))]"} />
         <KPICard title="TACoS" value={formatPercent(tacos)} icon={TrendingUp} valueClassName={tacos < 10 ? "text-[hsl(var(--success))]" : "text-[hsl(var(--warning))]"} />
         <KPICard title="CTR" value={formatPercent(ctr)} icon={MousePointerClick} />
       </div>
 
       <Card className="mt-6">
-        <CardHeader><CardTitle>RPP広告費・売上推移</CardTitle></CardHeader>
+        <CardHeader><CardTitle>広告費・売上推移</CardTitle></CardHeader>
         <CardContent>
           <ResponsiveContainer width="100%" height={300}>
             <ComposedChart data={chartData}>
@@ -175,45 +110,52 @@ export default function RakutenRppPage() {
               <YAxis yAxisId="right" orientation="right" stroke="hsl(0 0% 50%)" fontSize={12} />
               <Tooltip contentStyle={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px" }} />
               <Legend />
-              <Bar yAxisId="left" dataKey="RPP広告費" fill={RAKUTEN_RED} radius={[4, 4, 0, 0]} />
-              <Bar yAxisId="left" dataKey="RPP広告売上" fill="#22c55e" radius={[4, 4, 0, 0]} />
-              <Line yAxisId="right" type="monotone" dataKey="ACOS" stroke="#f97316" strokeWidth={2} dot={false} />
+              <Bar yAxisId="left" dataKey="広告費" fill={CHART_COLORS[4]} radius={[4, 4, 0, 0]} />
+              <Bar yAxisId="left" dataKey="広告売上" fill={CHART_COLORS[1]} radius={[4, 4, 0, 0]} />
+              <Line yAxisId="right" type="monotone" dataKey="ACOS" stroke={CHART_COLORS[0]} strokeWidth={2} dot={false} />
             </ComposedChart>
           </ResponsiveContainer>
         </CardContent>
       </Card>
 
       <Card className="mt-6">
-        <CardHeader><CardTitle>商品別RPP広告データ</CardTitle></CardHeader>
+        <CardHeader><CardTitle>商品グループ別広告データ</CardTitle></CardHeader>
         <CardContent className="p-0">
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>商品名</TableHead>
+                <TableHead>商品グループ</TableHead>
                 <TableHead className="text-right">広告費</TableHead>
                 <TableHead className="text-right">広告売上</TableHead>
-                <TableHead className="text-right">ACOS</TableHead>
                 <TableHead className="text-right">ROAS</TableHead>
+                <TableHead className="text-right">ACoS</TableHead>
+                <TableHead className="text-right">TACoS</TableHead>
                 <TableHead className="text-right">クリック</TableHead>
-                <TableHead className="text-right">インプレッション</TableHead>
                 <TableHead className="text-right">CTR</TableHead>
+                <TableHead className="text-right">広告CVR</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {productAdData.map((p: any, i: number) => {
-                const acos = p.ad_sales > 0 ? (p.ad_spend / p.ad_sales) * 100 : 0;
-                const prodRoas = p.ad_spend > 0 ? p.ad_sales / p.ad_spend : 0;
-                const prodCtr = p.impressions > 0 ? (p.clicks / p.impressions) * 100 : 0;
+              {groupAdData.map((g: any, i: number) => {
+                const acos = g.ad_sales > 0 ? (g.ad_spend / g.ad_sales) * 100 : 0;
+                const grpRoas = g.ad_spend > 0 ? (g.ad_sales / g.ad_spend) * 100 : 0;
+                const grpTotalSales = (productSummary as any[])
+                  .filter((ps: any) => g.productIds.has(ps.product?.id))
+                  .reduce((s: number, ps: any) => s + ps.total_sales, 0);
+                const grpTacos = grpTotalSales > 0 ? (g.ad_spend / grpTotalSales) * 100 : 0;
+                const grpCtr = g.impressions > 0 ? (g.clicks / g.impressions) * 100 : 0;
+                const grpCvr = g.clicks > 0 && g.ad_orders > 0 ? (g.ad_orders / g.clicks) * 100 : 0;
                 return (
                   <TableRow key={i}>
-                    <TableCell className="font-medium">{p.product?.name || "不明"}</TableCell>
-                    <TableCell className="text-right">{formatCurrency(p.ad_spend)}</TableCell>
-                    <TableCell className="text-right text-red-500">{formatCurrency(p.ad_sales)}</TableCell>
+                    <TableCell className="font-medium">{g.group}</TableCell>
+                    <TableCell className="text-right">{formatCurrency(g.ad_spend)}</TableCell>
+                    <TableCell className="text-right text-[hsl(var(--primary))]">{formatCurrency(g.ad_sales)}</TableCell>
+                    <TableCell className={`text-right ${grpRoas > 300 ? "text-[hsl(var(--success))]" : ""}`}>{formatPercent(grpRoas)}</TableCell>
                     <TableCell className={`text-right ${acos < 30 ? "text-[hsl(var(--success))]" : "text-[hsl(var(--warning))]"}`}>{formatPercent(acos)}</TableCell>
-                    <TableCell className="text-right">{prodRoas.toFixed(2)}x</TableCell>
-                    <TableCell className="text-right">{formatNumber(p.clicks)}</TableCell>
-                    <TableCell className="text-right">{formatNumber(p.impressions)}</TableCell>
-                    <TableCell className="text-right">{formatPercent(prodCtr)}</TableCell>
+                    <TableCell className={`text-right ${grpTacos < 10 ? "text-[hsl(var(--success))]" : "text-[hsl(var(--warning))]"}`}>{grpTotalSales > 0 ? formatPercent(grpTacos) : "-"}</TableCell>
+                    <TableCell className="text-right">{formatNumber(g.clicks)}</TableCell>
+                    <TableCell className="text-right">{formatPercent(grpCtr)}</TableCell>
+                    <TableCell className="text-right">{g.ad_orders > 0 ? formatPercent(grpCvr) : "-"}</TableCell>
                   </TableRow>
                 );
               })}

@@ -26,7 +26,7 @@ export async function getAdSummary(params: {
 }) {
   let query = supabase
     .from("daily_advertising")
-    .select("ad_spend, ad_sales, impressions, clicks");
+    .select("ad_spend, ad_sales, ad_orders, impressions, clicks");
 
   if (params.startDate) query = query.gte("date", params.startDate);
   if (params.endDate) query = query.lte("date", params.endDate);
@@ -34,17 +34,18 @@ export async function getAdSummary(params: {
   const { data, error } = await query;
   if (error) {
     console.warn("getAdSummary error:", error);
-    return { total_ad_spend: 0, total_ad_sales: 0, total_impressions: 0, total_clicks: 0 };
+    return { total_ad_spend: 0, total_ad_sales: 0, total_ad_orders: 0, total_impressions: 0, total_clicks: 0 };
   }
 
   return (data || []).reduce(
     (acc, row) => ({
       total_ad_spend: acc.total_ad_spend + row.ad_spend,
       total_ad_sales: acc.total_ad_sales + row.ad_sales,
+      total_ad_orders: acc.total_ad_orders + (row.ad_orders || 0),
       total_impressions: acc.total_impressions + row.impressions,
       total_clicks: acc.total_clicks + row.clicks,
     }),
-    { total_ad_spend: 0, total_ad_sales: 0, total_impressions: 0, total_clicks: 0 }
+    { total_ad_spend: 0, total_ad_sales: 0, total_ad_orders: 0, total_impressions: 0, total_clicks: 0 }
   );
 }
 

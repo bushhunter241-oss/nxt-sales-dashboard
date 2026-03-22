@@ -12,6 +12,7 @@ interface DailyAdAggregate {
   date: string;
   ad_spend: number;
   ad_sales: number;
+  ad_orders: number;
   impressions: number;
   clicks: number;
   acos: number;
@@ -72,6 +73,7 @@ export async function processAdsReportData(
       date: row.date,
       ad_spend: 0,
       ad_sales: 0,
+      ad_orders: 0,
       impressions: 0,
       clicks: 0,
       acos: 0,
@@ -81,8 +83,9 @@ export async function processAdsReportData(
       source: "ads-api" as const,
     };
 
-    existing.ad_spend += Math.round((row.cost || 0) * 100) / 100;
-    existing.ad_sales += Math.round((row.sales14d || row.sales7d || 0) * 100) / 100;
+    existing.ad_spend += Math.round(row.cost || 0);
+    existing.ad_sales += Math.round(row.sales14d || row.sales7d || 0);
+    existing.ad_orders += row.purchases7d || row.orders7d || row.orders14d || 0;
     existing.impressions += row.impressions || 0;
     existing.clicks += row.clicks || 0;
 
@@ -117,6 +120,7 @@ export async function processAdsReportData(
         .update({
           ad_spend: record.ad_spend,
           ad_sales: record.ad_sales,
+          ad_orders: record.ad_orders,
           impressions: record.impressions,
           clicks: record.clicks,
           acos: record.acos,

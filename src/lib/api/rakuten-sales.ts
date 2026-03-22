@@ -49,6 +49,27 @@ export async function getAggregatedRakutenDailySales(params: {
   return Object.values(grouped);
 }
 
+export async function getRakutenDailyAdSpendByDate(params: {
+  startDate?: string;
+  endDate?: string;
+}) {
+  let query = supabase
+    .from("rakuten_daily_advertising")
+    .select("date, ad_spend");
+
+  if (params.startDate) query = query.gte("date", params.startDate);
+  if (params.endDate) query = query.lte("date", params.endDate);
+
+  const { data, error } = await query;
+  if (error) { console.warn("getRakutenDailyAdSpendByDate error:", error); return {}; }
+
+  const byDate: Record<string, number> = {};
+  for (const row of data || []) {
+    byDate[row.date] = (byDate[row.date] || 0) + row.ad_spend;
+  }
+  return byDate;
+}
+
 export async function upsertRakutenDailySales(sales: Omit<RakutenDailySales, "id" | "created_at">) {
   const { data, error } = await supabase
     .from("rakuten_daily_sales")
@@ -57,6 +78,50 @@ export async function upsertRakutenDailySales(sales: Omit<RakutenDailySales, "id
     .single();
   if (error) throw error;
   return data as RakutenDailySales;
+}
+
+/**
+ * Safely update access_count and cvr without overwriting existing sales data.
+ * If no row exists for the product+date, creates one with the access data.
+ */
+export async function updateRakutenAccessData(params: {
+  productId: string;
+  date: string;
+  accessCount: number;
+  cvr: number;
+}) {
+  // Check if a row already exists
+  const { data: existing } = await supabase
+    .from("rakuten_daily_sales")
+    .select("id, orders, sales_amount, units_sold, cancellations, source")
+    .eq("product_id", params.productId)
+    .eq("date", params.date)
+    .maybeSingle();
+
+  if (existing) {
+    // Update only access_count and cvr, preserve everything else
+    const { error } = await supabase
+      .from("rakuten_daily_sales")
+      .update({ access_count: params.accessCount, cvr: params.cvr })
+      .eq("id", existing.id);
+    if (error) throw error;
+  } else {
+    // No existing row — create new with access data only
+    const { error } = await supabase
+      .from("rakuten_daily_sales")
+      .insert({
+        product_id: params.productId,
+        date: params.date,
+        access_count: params.accessCount,
+        orders: 0,
+        sales_amount: 0,
+        units_sold: 0,
+        cvr: params.cvr,
+        cancellations: 0,
+        source: "csv" as const,
+      });
+    if (error) throw error;
+  }
 }
 
 export async function getRakutenProductSalesSummary(params: {

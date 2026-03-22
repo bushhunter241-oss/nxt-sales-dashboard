@@ -1,5 +1,5 @@
-import { supabase } from "@/lib/supabase";
-import { getOrders, getOrderItems, getFbaInventory, downloadSalesTrafficReport, getCatalogItemBSR, getListingsReportDebugInfo } from "@/lib/amazon/sp-api";
+import { getSupabaseAdmin } from "@/lib/supabase";
+import { getOrders, getOrderItems, getFbaInventory, downloadSalesTrafficReport, getCatalogItemBSR, getListingsReportDebugInfo, getFbaFeeEstimate } from "@/lib/amazon/sp-api";
 import type { SpApiOrder } from "@/lib/amazon/sp-api";
 import type { Product } from "@/types/database";
 
@@ -12,14 +12,14 @@ interface SyncResult {
     ordersFromApi: number;
     inventoryFromApi?: number;
     autoCreatedProducts?: number;
+    matchedOrders?: number;
+    unmatchedAsins?: string[];
   };
 }
 
 // ============================================
-// Orders → daily_sales sync (FAST MODE)
+// Orders → daily_sales sync (ASIN-based matching)
 // ============================================
-// Uses order-level OrderTotal instead of per-order getOrderItems calls
-// This is ~30x faster: 1 API call for 100 orders vs 100+ individual calls
 
 interface DailySalesAggregate {
   product_id: string;
@@ -33,59 +33,25 @@ interface DailySalesAggregate {
   source: "sp-api";
 }
 
-/**
- * Get or create a catch-all product for order-level sync
- * Used when we don't have per-item ASIN data (fast mode)
- */
-async function getOrCreateCatchAllProduct(): Promise<Product | null> {
-  const CATCH_ALL_CODE = "SP-API-ALL";
-
-  const { data: existing } = await supabase
-    .from("products")
-    .select("*")
-    .eq("code", CATCH_ALL_CODE)
-    .eq("is_archived", false)
-    .maybeSingle();
-
-  if (existing) return existing as Product;
-
-  const { data, error } = await supabase
-    .from("products")
-    .insert({
-      name: "Amazon売上（全商品）",
-      code: CATCH_ALL_CODE,
-      asin: null,
-      sku: null,
-      selling_price: 0,
-      cost_price: 0,
-      fba_fee_rate: 15,
-      category: null,
-      is_archived: false,
-    })
-    .select()
-    .single();
-
-  if (error) {
-    console.error(`[Catch-All Product] Failed to create: ${error.message}`);
-    return null;
-  }
-
-  return data as Product;
+function syncSleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**
- * Sync orders from SP-API to daily_sales table (FAST MODE)
- * Uses order-level OrderTotal — no per-order getOrderItems calls
- * Aggregates all orders into a single catch-all product per day
+ * Sync orders from SP-API to daily_sales table (ASIN-based matching)
+ * Fetches order items per order to get ASIN, then matches to products table.
+ * Auto-creates products for unknown ASINs.
  */
 export async function syncOrders(
   startDate: string,
   endDate: string
 ): Promise<SyncResult> {
+  const db = getSupabaseAdmin();
   const errors: string[] = [];
   let recordsProcessed = 0;
+  let autoCreatedProducts = 0;
 
-  // 1. Fetch orders from SP-API (single paginated API call, very fast)
+  // 1. Fetch orders from SP-API
   console.log(`[SP-API Sync] Fetching orders from ${startDate} to ${endDate}...`);
   const orders = await getOrders(startDate, endDate);
   console.log(`[SP-API Sync] Orders returned: ${orders.length}`);
@@ -94,70 +60,170 @@ export async function syncOrders(
     return {
       recordsProcessed: 0,
       errors: ["指定期間に注文がありませんでした"],
-      debug: {
-        totalProducts: 0,
-        productsWithAsin: 0,
-        ordersFromApi: 0,
-        autoCreatedProducts: 0,
-      },
+      debug: { totalProducts: 0, productsWithAsin: 0, ordersFromApi: 0, autoCreatedProducts: 0, matchedOrders: 0 },
     };
   }
 
-  // 2. Get or create catch-all product for fast aggregation
-  const catchAllProduct = await getOrCreateCatchAllProduct();
-  if (!catchAllProduct) {
-    return {
-      recordsProcessed: 0,
-      errors: ["キャッチオール商品の作成に失敗しました"],
-      debug: { totalProducts: 0, productsWithAsin: 0, ordersFromApi: orders.length, autoCreatedProducts: 0 },
-    };
+  // 2. Load existing products (ASIN→product mapping)
+  const { data: products } = await db
+    .from("products")
+    .select("id, asin, sku, name, fba_shipping_fee, selling_price")
+    .eq("is_archived", false);
+
+  const asinToProduct = new Map<string, { id: string; name: string; fba_shipping_fee: number }>();
+  const skuToProduct = new Map<string, { id: string; name: string; fba_shipping_fee: number }>();
+  for (const p of products || []) {
+    if (p.asin) asinToProduct.set(p.asin, { id: p.id, name: p.name, fba_shipping_fee: p.fba_shipping_fee || 0 });
+    if (p.sku) skuToProduct.set(p.sku, { id: p.id, name: p.name, fba_shipping_fee: p.fba_shipping_fee || 0 });
   }
 
-  // 3. Aggregate orders by date (no per-order API calls needed!)
+  console.log(`[SP-API Sync] Products loaded: ${products?.length || 0} (ASIN mapped: ${asinToProduct.size}, SKU mapped: ${skuToProduct.size})`);
+
+  // 3. Fetch order items for each order and aggregate by product+date
   const aggregateMap = new Map<string, DailySalesAggregate>();
+  const unmatchedAsins = new Set<string>();
+  const feeUpdatedAsins = new Set<string>(); // Track ASINs whose fees have been estimated
+  let matchedOrders = 0;
 
   for (const order of orders) {
-    // Convert UTC PurchaseDate to JST (UTC+9) before extracting date,
-    // so bucketing matches Amazon Seller Central which displays in JST
-    const purchaseDateJST = new Date(new Date(order.PurchaseDate).getTime() + 9 * 60 * 60 * 1000);
-    const date = purchaseDateJST.toISOString().split("T")[0];
-    const key = `${catchAllProduct.id}_${date}`;
-    const amount = order.OrderTotal
-      ? Math.round(parseFloat(order.OrderTotal.Amount))
-      : 0;
-    const units = order.NumberOfItemsShipped + order.NumberOfItemsUnshipped;
     const isCancelled = order.OrderStatus === "Canceled";
 
-    const existing = aggregateMap.get(key) || {
-      product_id: catchAllProduct.id,
-      date,
-      sessions: 0,
-      orders: 0,
-      sales_amount: 0,
-      units_sold: 0,
-      cancellations: 0,
-      cvr: 0,
-      source: "sp-api" as const,
-    };
+    // Convert PurchaseDate to JST for bucketing
+    const purchaseDateJST = new Date(new Date(order.PurchaseDate).getTime() + 9 * 60 * 60 * 1000);
+    const date = purchaseDateJST.toISOString().split("T")[0];
 
-    if (isCancelled) {
-      existing.cancellations += units || 1;
-    } else {
-      existing.orders += 1;
-      existing.units_sold += units;
-      existing.sales_amount += amount;
+    try {
+      const items = await getOrderItems(order.AmazonOrderId);
+
+      for (const item of items) {
+        // Match by ASIN first, then SKU
+        let matched = asinToProduct.get(item.ASIN) || skuToProduct.get(item.SellerSKU);
+        const itemPrice = item.ItemPrice ? Math.round(parseFloat(item.ItemPrice.Amount)) : 0;
+
+        // Auto-create product if not found
+        if (!matched) {
+          // Estimate FBA fees before creating
+          let fbaShippingFee = 0;
+          const feeEstimate = await getFbaFeeEstimate(item.ASIN, itemPrice || 3000);
+          if (feeEstimate) {
+            fbaShippingFee = feeEstimate.FBAFulfillmentFeePerUnit;
+            console.log(`[SP-API Sync] Fee estimate for ${item.ASIN}: FBA=¥${fbaShippingFee}`);
+          }
+          await syncSleep(350);
+
+          const { data: newProduct, error: createErr } = await db
+            .from("products")
+            .insert({
+              name: (item.Title || item.ASIN).slice(0, 100),
+              code: item.SellerSKU || item.ASIN,
+              asin: item.ASIN,
+              sku: item.SellerSKU || null,
+              selling_price: itemPrice,
+              cost_price: 0,
+              fba_fee_rate: 15,
+              fba_shipping_fee: fbaShippingFee,
+              category: null,
+              is_archived: false,
+            })
+            .select("id, name")
+            .single();
+
+          if (createErr) {
+            errors.push(`商品自動作成失敗 ${item.ASIN}: ${createErr.message}`);
+            unmatchedAsins.add(item.ASIN);
+            continue;
+          }
+
+          matched = { id: newProduct.id, name: newProduct.name, fba_shipping_fee: fbaShippingFee };
+          asinToProduct.set(item.ASIN, matched);
+          if (item.SellerSKU) skuToProduct.set(item.SellerSKU, matched);
+          feeUpdatedAsins.add(item.ASIN);
+          autoCreatedProducts++;
+          console.log(`[SP-API Sync] Auto-created product: ${matched.name} (${item.ASIN}) FBA=¥${fbaShippingFee}/個`);
+        }
+
+        // Update FBA fee for existing products with fba_shipping_fee=0 (once per ASIN)
+        if (matched.fba_shipping_fee === 0 && !feeUpdatedAsins.has(item.ASIN)) {
+          feeUpdatedAsins.add(item.ASIN);
+          const price = itemPrice || (products || []).find(p => p.asin === item.ASIN)?.selling_price || 3000;
+          const feeEstimate = await getFbaFeeEstimate(item.ASIN, price);
+          if (feeEstimate && feeEstimate.FBAFulfillmentFeePerUnit > 0) {
+            await db
+              .from("products")
+              .update({ fba_shipping_fee: feeEstimate.FBAFulfillmentFeePerUnit })
+              .eq("id", matched.id);
+            matched.fba_shipping_fee = feeEstimate.FBAFulfillmentFeePerUnit;
+            console.log(`[SP-API Sync] Updated FBA fee for ${matched.name}: ¥${feeEstimate.FBAFulfillmentFeePerUnit}/個`);
+          }
+          await syncSleep(350);
+        }
+
+        const key = `${matched.id}_${date}`;
+        const amount = item.ItemPrice ? Math.round(parseFloat(item.ItemPrice.Amount)) : 0;
+        const units = item.QuantityOrdered || 1;
+
+        const existing = aggregateMap.get(key) || {
+          product_id: matched.id,
+          date,
+          sessions: 0,
+          orders: 0,
+          sales_amount: 0,
+          units_sold: 0,
+          cancellations: 0,
+          cvr: 0,
+          source: "sp-api" as const,
+        };
+
+        if (isCancelled) {
+          existing.cancellations += units;
+        } else {
+          existing.orders += 1;
+          existing.units_sold += units;
+          existing.sales_amount += amount;
+        }
+
+        aggregateMap.set(key, existing);
+        matchedOrders++;
+      }
+
+      // Rate limit: SP-API getOrderItems is 1 req/s burst
+      await syncSleep(350);
+
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      errors.push(`注文明細取得失敗 ${order.AmazonOrderId}: ${msg}`);
     }
-
-    aggregateMap.set(key, existing);
   }
 
-  // 4. Upsert aggregated data to daily_sales
+  // 4. Save aggregated data to daily_sales (preserve existing sessions from traffic sync)
   const records = Array.from(aggregateMap.values());
 
   for (const record of records) {
-    const { error } = await supabase.from("daily_sales").upsert(record, {
-      onConflict: "product_id,date",
-    });
+    // Check if a row already exists (may have sessions from traffic sync)
+    const { data: existing } = await db
+      .from("daily_sales")
+      .select("id, sessions")
+      .eq("product_id", record.product_id)
+      .eq("date", record.date)
+      .maybeSingle();
+
+    let error;
+    if (existing) {
+      // Update only order-related fields, preserve sessions/cvr from traffic sync
+      ({ error } = await db
+        .from("daily_sales")
+        .update({
+          orders: record.orders,
+          sales_amount: record.sales_amount,
+          units_sold: record.units_sold,
+          cancellations: record.cancellations,
+          source: "sp-api",
+        })
+        .eq("id", existing.id));
+    } else {
+      // No existing row, insert full record
+      ({ error } = await db.from("daily_sales").insert(record));
+    }
 
     if (error) {
       errors.push(`売上保存失敗 ${record.date}: ${error.message}`);
@@ -170,10 +236,12 @@ export async function syncOrders(
     recordsProcessed,
     errors,
     debug: {
-      totalProducts: 1,
-      productsWithAsin: 0,
+      totalProducts: products?.length || 0,
+      productsWithAsin: asinToProduct.size,
       ordersFromApi: orders.length,
-      autoCreatedProducts: catchAllProduct ? 1 : 0,
+      autoCreatedProducts,
+      matchedOrders,
+      unmatchedAsins: Array.from(unmatchedAsins),
     },
   };
 }
@@ -186,11 +254,12 @@ export async function syncOrders(
  * Sync FBA inventory levels to inventory table
  */
 export async function syncInventory(): Promise<SyncResult> {
+  const db = getSupabaseAdmin();
   const errors: string[] = [];
   let recordsProcessed = 0;
 
   // 1. Get all products for ASIN mapping
-  const { data: products } = await supabase
+  const { data: products } = await db
     .from("products")
     .select("id, asin")
     .eq("is_archived", false);
@@ -234,7 +303,7 @@ export async function syncInventory(): Promise<SyncResult> {
     const newStock = item.inventoryDetails.fulfillableQuantity;
 
     // Get current stock to calculate change
-    const { data: currentInv } = await supabase
+    const { data: currentInv } = await db
       .from("inventory")
       .select("current_stock")
       .eq("product_id", productId)
@@ -244,7 +313,7 @@ export async function syncInventory(): Promise<SyncResult> {
     const stockChange = newStock - oldStock;
 
     // Upsert inventory
-    const { error } = await supabase.from("inventory").upsert(
+    const { error } = await db.from("inventory").upsert(
       {
         product_id: productId,
         current_stock: newStock,
@@ -260,7 +329,7 @@ export async function syncInventory(): Promise<SyncResult> {
 
     // Log inventory change if different
     if (stockChange !== 0) {
-      await supabase.from("inventory_logs").insert({
+      await db.from("inventory_logs").insert({
         product_id: productId,
         date: new Date().toISOString().split("T")[0],
         change_amount: stockChange,
@@ -296,12 +365,13 @@ export async function syncTraffic(
   startDate: string,
   endDate: string
 ): Promise<SyncResult> {
+  const db = getSupabaseAdmin();
   const errors: string[] = [];
   let recordsProcessed = 0;
 
   try {
     // 1. Get all products for ASIN mapping
-    const { data: products } = await supabase
+    const { data: products } = await db
       .from("products")
       .select("id, asin")
       .eq("is_archived", false);
@@ -371,22 +441,43 @@ export async function syncTraffic(
         }
         prevDayFingerprint = fingerprint;
 
-        // Upsert daily_sales records for this date (with full sales data)
+        // Save daily_sales records for this date (preserve cancellations from orders sync)
         for (const [productId, data] of dataMap) {
-          const { error } = await supabase.from("daily_sales").upsert(
-            {
+          const cvr = data.sessions > 0 ? Math.round((data.units_sold / data.sessions) * 10000) / 100 : 0;
+
+          const { data: existing } = await db
+            .from("daily_sales")
+            .select("id")
+            .eq("product_id", productId)
+            .eq("date", date)
+            .maybeSingle();
+
+          let error;
+          if (existing) {
+            // Update traffic fields, preserve cancellations from orders sync
+            ({ error } = await db
+              .from("daily_sales")
+              .update({
+                sessions: data.sessions,
+                orders: data.orders,
+                sales_amount: data.sales_amount,
+                units_sold: data.units_sold,
+                cvr,
+              })
+              .eq("id", existing.id));
+          } else {
+            ({ error } = await db.from("daily_sales").insert({
               product_id: productId,
-              date: date,
+              date,
               sessions: data.sessions,
               orders: data.orders,
               sales_amount: data.sales_amount,
               units_sold: data.units_sold,
-              cvr: data.sessions > 0 ? Math.round((data.units_sold / data.sessions) * 10000) / 100 : 0,
+              cvr,
               cancellations: 0,
-              source: "csv",
-            },
-            { onConflict: "product_id,date" }
-          );
+              source: "sp-api",
+            }));
+          }
 
           if (error) {
             errors.push(`Failed to upsert ${date}: ${error.message}`);
@@ -426,11 +517,12 @@ function bsrSleep(ms: number): Promise<void> {
  * Sync BSR (Best Sellers Rank) for all active products with ASINs
  */
 export async function syncBSR(): Promise<SyncResult> {
+  const db = getSupabaseAdmin();
   const errors: string[] = [];
   let recordsProcessed = 0;
 
   // 1. Get all active products with ASINs
-  const { data: products } = await supabase
+  const { data: products } = await db
     .from("products")
     .select("id, asin, name")
     .eq("is_archived", false)
@@ -455,7 +547,7 @@ export async function syncBSR(): Promise<SyncResult> {
       if (bsrData && bsrData.rankings.length > 0) {
         // Insert all rankings for this product
         for (const ranking of bsrData.rankings) {
-          const { error } = await supabase.from("bsr_rankings").insert({
+          const { error } = await db.from("bsr_rankings").insert({
             product_id: product.id,
             asin: product.asin,
             category_id: ranking.categoryId,

@@ -4,41 +4,39 @@ import { PageHeader } from "@/components/layout/page-header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatCurrency, formatPercent, formatNumber } from "@/lib/utils";
-import { getAggregatedRakutenDailySales } from "@/lib/api/rakuten-sales";
+import { getRakutenDailySales } from "@/lib/api/rakuten-sales";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
-
-const RAKUTEN_RED = "#bf0000";
+import { CHART_COLORS } from "@/lib/constants";
 
 export default function RakutenMonthlyPage() {
-  const { data: allSales = [] } = useQuery({
+  const { data: salesData = [] } = useQuery({
     queryKey: ["rakutenAllSales"],
-    queryFn: () => getAggregatedRakutenDailySales({}),
+    queryFn: () => getRakutenDailySales({}),
   });
 
-  // Group by month
-  const monthlyMap = (allSales as any[]).reduce((acc: Record<string, any>, row: any) => {
-    const month = row.date.slice(0, 7); // YYYY-MM
+  const monthly = (salesData as any[]).reduce((acc: Record<string, any>, row: any) => {
+    const month = row.date.slice(0, 7);
     if (!acc[month]) acc[month] = { month, sales_amount: 0, orders: 0, access_count: 0, units_sold: 0 };
-    acc[month].sales_amount += row.sales_amount;
-    acc[month].orders += row.orders;
-    acc[month].access_count += row.access_count;
-    acc[month].units_sold += row.units_sold;
+    acc[month].sales_amount += row.sales_amount || 0;
+    acc[month].orders += row.orders || 0;
+    acc[month].access_count += row.access_count || 0;
+    acc[month].units_sold += row.units_sold || 0;
     return acc;
   }, {});
 
-  const monthlyData = Object.values(monthlyMap)
-    .sort((a: any, b: any) => a.month.localeCompare(b.month))
-    .slice(-12);
-
-  const chartData = monthlyData.map((m: any) => ({
-    month: m.month.slice(5) + "月",
-    売上: m.sales_amount,
-    注文数: m.orders,
+  const now = new Date();
+  const cutoff = `${now.getFullYear() - 1}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const monthlyData = Object.values(monthly)
+    .filter((m: any) => m.month >= cutoff)
+    .sort((a: any, b: any) => b.month.localeCompare(a.month));
+  const chartData = [...monthlyData].reverse().slice(-12).map((d: any) => ({
+    month: d.month.slice(2),
+    売上: d.sales_amount,
   }));
 
   return (
     <div>
-      <PageHeader title="🔴 楽天 月別分析" description="楽天市場の月別売上推移（最新12ヶ月）" />
+      <PageHeader title="【楽天】月別分析" description="楽天市場の月別売上推移" />
 
       <Card>
         <CardHeader><CardTitle>月別売上推移</CardTitle></CardHeader>
@@ -48,12 +46,9 @@ export default function RakutenMonthlyPage() {
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(0 0% 20%)" />
               <XAxis dataKey="month" stroke="hsl(0 0% 50%)" fontSize={12} />
               <YAxis stroke="hsl(0 0% 50%)" fontSize={12} tickFormatter={(v) => `¥${(v / 10000).toFixed(0)}万`} />
-              <Tooltip
-                contentStyle={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px" }}
-                formatter={(value: any) => formatCurrency(value)}
-              />
+              <Tooltip contentStyle={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px" }} formatter={(value: any) => formatCurrency(value)} />
               <Legend />
-              <Bar dataKey="売上" fill={RAKUTEN_RED} radius={[4, 4, 0, 0]} />
+              <Bar dataKey="売上" fill={CHART_COLORS[0]} radius={[4, 4, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </CardContent>
@@ -65,32 +60,28 @@ export default function RakutenMonthlyPage() {
             <TableHeader>
               <TableRow>
                 <TableHead>月</TableHead>
-                <TableHead className="text-right">売上</TableHead>
-                <TableHead className="text-right">注文数</TableHead>
+                <TableHead className="text-right">売上合計</TableHead>
+                <TableHead className="text-right">注文件数</TableHead>
                 <TableHead className="text-right">販売個数</TableHead>
-                <TableHead className="text-right">アクセス</TableHead>
+                <TableHead className="text-right">アクセス数</TableHead>
                 <TableHead className="text-right">CVR</TableHead>
                 <TableHead className="text-right">前月比</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {[...monthlyData].reverse().map((m: any, i: number, arr: any[]) => {
-                const prev = arr[i + 1];
-                const mom = prev && prev.sales_amount > 0
-                  ? ((m.sales_amount - prev.sales_amount) / prev.sales_amount) * 100
-                  : null;
-                const cvr = m.access_count > 0 ? (m.orders / m.access_count) * 100 : 0;
-                const [y, mo] = m.month.split("-");
+              {monthlyData.map((m: any, i: number) => {
+                const prev = monthlyData[i + 1];
+                const momChange = prev ? ((m.sales_amount - prev.sales_amount) / prev.sales_amount) * 100 : 0;
                 return (
                   <TableRow key={m.month}>
-                    <TableCell className="font-medium">{y}年{Number(mo)}月</TableCell>
-                    <TableCell className="text-right text-red-500">{formatCurrency(m.sales_amount)}</TableCell>
+                    <TableCell className="font-medium">{m.month}</TableCell>
+                    <TableCell className="text-right text-[hsl(var(--primary))]">{formatCurrency(m.sales_amount)}</TableCell>
                     <TableCell className="text-right">{formatNumber(m.orders)}</TableCell>
                     <TableCell className="text-right">{formatNumber(m.units_sold)}</TableCell>
                     <TableCell className="text-right">{formatNumber(m.access_count)}</TableCell>
-                    <TableCell className="text-right">{formatPercent(cvr)}</TableCell>
-                    <TableCell className={`text-right ${mom !== null ? (mom >= 0 ? "text-[hsl(var(--success))]" : "text-[hsl(var(--destructive))]") : ""}`}>
-                      {mom !== null ? `${mom >= 0 ? "+" : ""}${mom.toFixed(1)}%` : "-"}
+                    <TableCell className="text-right">{m.access_count > 0 ? formatPercent((m.orders / m.access_count) * 100) : "-"}</TableCell>
+                    <TableCell className={`text-right ${momChange >= 0 ? "text-[hsl(var(--success))]" : "text-[hsl(var(--destructive))]"}`}>
+                      {prev ? `${momChange >= 0 ? "+" : ""}${momChange.toFixed(1)}%` : "-"}
                     </TableCell>
                   </TableRow>
                 );

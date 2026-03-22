@@ -36,3 +36,6 @@ next-env.d.ts
 
 # csv data files
 *.csv
+
+# deploy script (contains Vercel token)
+deploy.sh

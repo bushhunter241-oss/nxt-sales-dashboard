@@ -39,7 +39,8 @@ function aggregateOrders(orders: RakutenOrder[]): AggEntry[] {
 
     for (const pkg of order.PackageModelList || []) {
       for (const item of pkg.ItemModelList || []) {
-        const productId = item.manageNumber || item.itemId || item.itemNumber || "unknown";
+        const sku = item.SkuModelList?.[0];
+        const productId = sku?.merchantDefinedSkuId || sku?.variantId || item.itemNumber || item.manageNumber || item.itemId || "unknown";
         const units = item.units || 1;
         const sales = (item.priceTaxIncl || item.price || 0) * units;
 

@@ -49,11 +49,34 @@ export async function getRakutenAdSummary(params: {
 }
 
 export async function upsertRakutenDailyAdvertising(ad: Omit<RakutenDailyAdvertising, "id" | "created_at">) {
-  const { data, error } = await supabase
+  // まず既存レコードを検索して、あればUPDATE、なければINSERT（手動upsert）
+  // DBにproduct_id+dateのユニーク制約がないため、重複防止のため手動で処理
+  const { data: existing } = await supabase
     .from("rakuten_daily_advertising")
-    .insert(ad)
-    .select()
+    .select("id")
+    .eq("product_id", ad.product_id)
+    .eq("date", ad.date)
+    .limit(1)
     .single();
-  if (error) throw error;
-  return data as RakutenDailyAdvertising;
+
+  if (existing) {
+    // 既存レコードを更新
+    const { data, error } = await supabase
+      .from("rakuten_daily_advertising")
+      .update(ad)
+      .eq("id", existing.id)
+      .select()
+      .single();
+    if (error) throw error;
+    return data as RakutenDailyAdvertising;
+  } else {
+    // 新規挿入
+    const { data, error } = await supabase
+      .from("rakuten_daily_advertising")
+      .insert(ad)
+      .select()
+      .single();
+    if (error) throw error;
+    return data as RakutenDailyAdvertising;
+  }
 }

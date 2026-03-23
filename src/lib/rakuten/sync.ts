@@ -6,7 +6,7 @@
  */
 
 import { supabase } from "@/lib/supabase";
-import { fetchRakutenOrders, type RakutenOrder } from "./orders";
+import { fetchRakutenOrders, type RakutenOrder, type OrderItem } from "./orders";
 import type { RakutenCreds } from "./orders";
 
 interface SyncResult {
@@ -40,37 +40,55 @@ function aggregateOrders(orders: RakutenOrder[]): AggEntry[] {
     const date = datetime.split("T")[0];
     if (!date) continue;
 
+    // 注文全体のクーポン割引額（ポイント利用は含めない）
+    const couponTotal = order.couponAllTotalPrice || 0;
+
+    // 注文内の全商品を一度集めて合計金額を計算（クーポン按分用）
+    const allItems: OrderItem[] = [];
+    let orderGoodsTotal = 0;
     for (const pkg of order.PackageModelList || []) {
       for (const item of pkg.ItemModelList || []) {
-        const skuModel = item.SkuModelList?.[0];
-        // 子商品SKUを最優先。なければ親商品IDにフォールバック
-        const childSkuId = skuModel?.merchantDefinedSkuId || skuModel?.variantId;
-        const parentProductId = item.manageNumber || item.itemNumber || item.itemId;
-        const productId = childSkuId || parentProductId || "unknown";
-        const isChildSku = !!childSkuId;
-
+        allItems.push(item);
         const units = item.units || 1;
-        const sales = (item.priceTaxIncl || item.price || 0) * units;
+        orderGoodsTotal += (item.priceTaxIncl || item.price || 0) * units;
+      }
+    }
 
-        const key = `${productId}::${date}`;
-        const existing = map.get(key);
-        if (existing) {
-          existing.orders += 1;
-          existing.units_sold += units;
-          existing.sales_amount += sales;
-        } else {
-          map.set(key, {
-            product_id: productId,
-            parent_product_id: isChildSku ? (parentProductId || null) : null,
-            is_child_sku: isChildSku,
-            product_name: item.itemName || productId,
-            sku: childSkuId || null,
-            date,
-            orders: 1,
-            units_sold: units,
-            sales_amount: sales,
-          });
-        }
+    for (const item of allItems) {
+      const skuModel = item.SkuModelList?.[0];
+      // 子商品SKUを最優先。なければ親商品IDにフォールバック
+      const childSkuId = skuModel?.merchantDefinedSkuId || skuModel?.variantId;
+      const parentProductId = item.manageNumber || item.itemNumber || item.itemId;
+      const productId = childSkuId || parentProductId || "unknown";
+      const isChildSku = !!childSkuId;
+
+      const units = item.units || 1;
+      const itemGross = (item.priceTaxIncl || item.price || 0) * units;
+
+      // クーポン割引を商品金額の比率で按分
+      const couponShare = (couponTotal > 0 && orderGoodsTotal > 0)
+        ? Math.round(couponTotal * (itemGross / orderGoodsTotal))
+        : 0;
+      const sales = itemGross - couponShare;
+
+      const key = `${productId}::${date}`;
+      const existing = map.get(key);
+      if (existing) {
+        existing.orders += 1;
+        existing.units_sold += units;
+        existing.sales_amount += sales;
+      } else {
+        map.set(key, {
+          product_id: productId,
+          parent_product_id: isChildSku ? (parentProductId || null) : null,
+          is_child_sku: isChildSku,
+          product_name: item.itemName || productId,
+          sku: childSkuId || null,
+          date,
+          orders: 1,
+          units_sold: units,
+          sales_amount: sales,
+        });
       }
     }
   }

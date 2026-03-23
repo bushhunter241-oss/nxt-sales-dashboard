@@ -13,6 +13,7 @@ export interface Product {
   category: string | null;
   product_group: string | null;
   parent_asin: string | null;
+  is_parent?: boolean;
   is_archived: boolean;
   created_at: string;
   updated_at: string;
@@ -110,6 +111,7 @@ export interface ProductEvent {
   product_group: string;
   event_type: string;
   memo: string;
+  product_id: string | null;
   created_at: string;
 }
 

@@ -183,7 +183,7 @@ export async function getRakutenProductSalesSummary(params: {
   // 施策カレンダーからセールイベントを取得（割引適用用）
   let eventQuery = supabase
     .from("product_events")
-    .select("date, product_group, memo")
+    .select("date, product_group, memo, product_id")
     .eq("event_type", "sale");
 
   if (params.startDate) eventQuery = eventQuery.gte("date", params.startDate);
@@ -191,12 +191,19 @@ export async function getRakutenProductSalesSummary(params: {
 
   const { data: saleEvents } = await eventQuery;
 
-  // date+product_group → 割引率のマップを構築
-  const discountMap = new Map<string, number>();
+  // 割引率のマップを構築
+  // 商品ID指定あり: date::product_id → 割引率（優先）
+  // グループ指定のみ: date::group::product_group → 割引率（フォールバック）
+  const discountByProduct = new Map<string, number>();
+  const discountByGroup = new Map<string, number>();
   for (const ev of saleEvents || []) {
     const rate = parseDiscountRate(ev.memo || "");
     if (rate > 0) {
-      discountMap.set(`${ev.date}::${ev.product_group}`, rate);
+      if (ev.product_id) {
+        discountByProduct.set(`${ev.date}::${ev.product_id}`, rate);
+      } else {
+        discountByGroup.set(`${ev.date}::${ev.product_group}`, rate);
+      }
     }
   }
 
@@ -235,9 +242,17 @@ export async function getRakutenProductSalesSummary(params: {
     let salesAmount = row.sales_amount;
 
     // 施策カレンダーのセール割引を適用
-    const productGroup = row.rakuten_product?.product_group;
-    if (productGroup && row.date) {
-      const discountRate = discountMap.get(`${row.date}::${productGroup}`);
+    // 1. 商品ID指定の割引を優先チェック
+    // 2. なければグループ指定の割引にフォールバック
+    if (row.date) {
+      const productSkuId = row.rakuten_product?.product_id;
+      const productGroup = row.rakuten_product?.product_group;
+      let discountRate = productSkuId
+        ? discountByProduct.get(`${row.date}::${productSkuId}`)
+        : undefined;
+      if (!discountRate && productGroup) {
+        discountRate = discountByGroup.get(`${row.date}::${productGroup}`);
+      }
       if (discountRate && discountRate > 0) {
         const discount = Math.round(salesAmount * (discountRate / 100));
         acc[pid].sale_discount += discount;

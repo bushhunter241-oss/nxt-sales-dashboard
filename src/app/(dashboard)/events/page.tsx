@@ -33,7 +33,7 @@ export default function EventsPage() {
   const [viewMonth, setViewMonth] = useState(now.getMonth()); // 0-indexed
   const [dialogOpen, setDialogOpen] = useState(false);
   const [selectedDate, setSelectedDate] = useState("");
-  const [form, setForm] = useState({ selectedGroups: [] as string[], endDate: "", event_type: "other", memo: "" });
+  const [form, setForm] = useState({ selectedGroups: [] as string[], endDate: "", event_type: "other", memo: "", product_id: "" });
   const queryClient = useQueryClient();
 
   const monthStart = `${viewYear}-${String(viewMonth + 1).padStart(2, "0")}-01`;
@@ -136,7 +136,7 @@ export default function EventsPage() {
 
   const openCreateDialog = (date: string) => {
     setSelectedDate(date);
-    setForm({ selectedGroups: [], endDate: date, event_type: "other", memo: "" });
+    setForm({ selectedGroups: [], endDate: date, event_type: "other", memo: "", product_id: "" });
     setDialogOpen(true);
   };
 
@@ -258,7 +258,14 @@ export default function EventsPage() {
                     {getEventLabel(ev.event_type)}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium">{ev.product_group}</p>
+                    <p className="text-sm font-medium">
+                      {ev.product_group}
+                      {ev.product_id && (
+                        <span className="ml-1.5 text-xs px-1.5 py-0.5 rounded bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]">
+                          {ev.product_id}
+                        </span>
+                      )}
+                    </p>
                     <p className="text-sm text-[hsl(var(--muted-foreground))]">{ev.memo || "(メモなし)"}</p>
                   </div>
                   <Button
@@ -292,6 +299,7 @@ export default function EventsPage() {
               productGroups: form.selectedGroups,
               event_type: form.event_type,
               memo: form.memo,
+              product_id: form.product_id || null,
             });
           }}
           className="space-y-4"
@@ -361,6 +369,17 @@ export default function EventsPage() {
               onChange={(e) => setForm({ ...form, memo: e.target.value })}
               placeholder="例: タイムセール3日間 / メイン画像変更"
             />
+          </div>
+          <div>
+            <label className="text-sm text-[hsl(var(--muted-foreground))]">商品ID（個別指定・任意）</label>
+            <Input
+              value={form.product_id}
+              onChange={(e) => setForm({ ...form, product_id: e.target.value })}
+              placeholder="例: sage30（空欄ならグループ全体に適用）"
+            />
+            <p className="text-xs text-[hsl(var(--muted-foreground))] mt-1">
+              特定商品だけ割引率を変えたい場合に指定
+            </p>
           </div>
 
           {/* Summary & submit */}

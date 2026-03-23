@@ -29,6 +29,7 @@ export async function createProductEventsBulk(params: {
   productGroups: string[];
   event_type: string;
   memo: string;
+  product_id?: string | null;
 }): Promise<number> {
   const res = await fetch("/api/events", {
     method: "POST",

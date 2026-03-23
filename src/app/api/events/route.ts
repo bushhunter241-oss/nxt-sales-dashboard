@@ -6,21 +6,21 @@ import { getSupabaseAdmin } from "@/lib/supabase";
  */
 export async function POST(request: NextRequest) {
   try {
-    const { startDate, endDate, productGroups, event_type, memo } = await request.json();
+    const { startDate, endDate, productGroups, event_type, memo, product_id } = await request.json();
 
     if (!startDate || !productGroups?.length || !event_type) {
       return NextResponse.json({ error: "startDate, productGroups, event_type are required" }, { status: 400 });
     }
 
     const db = getSupabaseAdmin();
-    const rows: { date: string; product_group: string; event_type: string; memo: string }[] = [];
+    const rows: { date: string; product_group: string; event_type: string; memo: string; product_id: string | null }[] = [];
     const current = new Date(startDate + "T00:00:00Z");
     const end = new Date((endDate || startDate) + "T00:00:00Z");
 
     while (current <= end) {
       const dateStr = current.toISOString().split("T")[0];
       for (const group of productGroups) {
-        rows.push({ date: dateStr, product_group: group, event_type, memo: memo || "" });
+        rows.push({ date: dateStr, product_group: group, event_type, memo: memo || "", product_id: product_id || null });
       }
       current.setUTCDate(current.getUTCDate() + 1);
     }

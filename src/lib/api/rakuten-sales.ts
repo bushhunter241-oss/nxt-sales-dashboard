@@ -144,13 +144,23 @@ function getEffectiveShippingFee(product: any, parentProductMap: Map<string, any
   return 0;
 }
 
+/**
+ * 施策カレンダーのセールイベントmemoから割引率(%)を抽出
+ * 例: "5%OFFクーポン" → 5, "10%引き" → 10, "20%ポイントバック" → 20
+ */
+function parseDiscountRate(memo: string): number {
+  const match = memo.match(/(\d+)%/);
+  return match ? parseInt(match[1], 10) : 0;
+}
+
 export async function getRakutenProductSalesSummary(params: {
   startDate?: string;
   endDate?: string;
 }) {
+  // 日付つきで売上を取得（セール割引の日別適用に必要）
   let query = supabase
     .from("rakuten_daily_sales")
-    .select("product_id, access_count, orders, sales_amount, units_sold, rakuten_product:rakuten_products(*)");
+    .select("product_id, date, access_count, orders, sales_amount, units_sold, rakuten_product:rakuten_products(*)");
 
   if (params.startDate) query = query.gte("date", params.startDate);
   if (params.endDate) query = query.lte("date", params.endDate);
@@ -169,6 +179,26 @@ export async function getRakutenProductSalesSummary(params: {
       .filter(p => !p.parent_product_id)
       .map(p => [p.product_id, p])
   );
+
+  // 施策カレンダーからセールイベントを取得（割引適用用）
+  let eventQuery = supabase
+    .from("product_events")
+    .select("date, product_group, memo")
+    .eq("event_type", "sale");
+
+  if (params.startDate) eventQuery = eventQuery.gte("date", params.startDate);
+  if (params.endDate) eventQuery = eventQuery.lte("date", params.endDate);
+
+  const { data: saleEvents } = await eventQuery;
+
+  // date+product_group → 割引率のマップを構築
+  const discountMap = new Map<string, number>();
+  for (const ev of saleEvents || []) {
+    const rate = parseDiscountRate(ev.memo || "");
+    if (rate > 0) {
+      discountMap.set(`${ev.date}::${ev.product_group}`, rate);
+    }
+  }
 
   // Fetch Rakuten advertising data
   let adQuery = supabase
@@ -198,9 +228,24 @@ export async function getRakutenProductSalesSummary(params: {
         total_orders: 0,
         total_access: 0,
         total_units: 0,
+        sale_discount: 0,
       };
     }
-    acc[pid].total_sales += row.sales_amount;
+
+    let salesAmount = row.sales_amount;
+
+    // 施策カレンダーのセール割引を適用
+    const productGroup = row.rakuten_product?.product_group;
+    if (productGroup && row.date) {
+      const discountRate = discountMap.get(`${row.date}::${productGroup}`);
+      if (discountRate && discountRate > 0) {
+        const discount = Math.round(salesAmount * (discountRate / 100));
+        acc[pid].sale_discount += discount;
+        salesAmount -= discount;
+      }
+    }
+
+    acc[pid].total_sales += salesAmount;
     acc[pid].total_orders += row.orders;
     acc[pid].total_access += row.access_count;
     acc[pid].total_units += row.units_sold;
@@ -236,7 +281,7 @@ export async function getRakutenProductSalesSummary(params: {
       profit_rate: profitRate,
       unit_profit: unitProfit,
     };
-  });
+  }).filter((item: any) => !item.product?.is_archived);
 }
 
 /**

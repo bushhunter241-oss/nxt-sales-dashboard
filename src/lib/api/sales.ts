@@ -17,7 +17,7 @@ export async function getDailySales(params: {
 
   const { data, error } = await query;
   if (error) { console.warn("getDailySales error:", error); return []; }
-  return data || [];
+  return (data || []).filter((r: any) => !r.product?.is_archived && !r.product?.is_parent);
 }
 
 export async function getAggregatedDailySales(params: {
@@ -26,7 +26,7 @@ export async function getAggregatedDailySales(params: {
 }) {
   let query = supabase
     .from("daily_sales")
-    .select("date, sessions, orders, sales_amount, units_sold")
+    .select("date, sessions, orders, sales_amount, units_sold, product:products(is_archived, is_parent)")
     .order("date", { ascending: true });
 
   if (params.startDate) query = query.gte("date", params.startDate);
@@ -35,8 +35,9 @@ export async function getAggregatedDailySales(params: {
   const { data, error } = await query;
   if (error) { console.warn("getAggregatedDailySales error:", error); return []; }
 
-  // Aggregate by date
-  const grouped = (data || []).reduce((acc: Record<string, any>, row) => {
+  // Aggregate by date (excluding archived/parent products)
+  const grouped = (data || []).reduce((acc: Record<string, any>, row: any) => {
+    if (row.product?.is_archived || row.product?.is_parent) return acc;
     if (!acc[row.date]) {
       acc[row.date] = { date: row.date, sessions: 0, orders: 0, sales_amount: 0, units_sold: 0 };
     }
@@ -122,6 +123,8 @@ export async function getProductSalesSummary(params: {
     const fbaFeeRate = product?.fba_fee_rate || 15;
     // fba_shipping_fee = FBA配送手数料（1個あたり固定額、円）例: 532
     const fbaShippingFee = product?.fba_shipping_fee || 0;
+    // point_rate = ポイント付与率（%）例: 1 → 売上の1%がポイント原資
+    const pointRate = product?.point_rate || 0;
     const ad = adByProduct[product?.id] || { ad_spend: 0, ad_sales: 0 };
 
     // Cost calculations
@@ -132,10 +135,12 @@ export async function getProductSalesSummary(params: {
     const totalShippingFee = fbaShippingFee * item.total_units;
     // FBA手数料合計 = 紹介料 + 配送手数料
     const totalFbaFee = totalReferralFee + totalShippingFee;
+    // ポイント原資 = 売上 × ポイント付与率
+    const totalPointCost = Math.round(item.total_sales * (pointRate / 100));
     const totalAdSpend = ad.ad_spend;
 
-    // Gross profit = 売上 - 原価 - 紹介料 - FBA配送手数料
-    const grossProfit = item.total_sales - totalCost - totalFbaFee;
+    // Gross profit = 売上 - 原価 - 紹介料 - FBA配送手数料 - ポイント原資
+    const grossProfit = item.total_sales - totalCost - totalFbaFee - totalPointCost;
     // Net profit = Gross Profit - 広告費
     const netProfit = grossProfit - totalAdSpend;
     // Profit rate
@@ -149,6 +154,7 @@ export async function getProductSalesSummary(params: {
       total_referral_fee: totalReferralFee,
       total_shipping_fee: totalShippingFee,
       total_fba_fee: totalFbaFee,
+      total_point_cost: totalPointCost,
       total_ad_spend: totalAdSpend,
       total_ad_sales: ad.ad_sales,
       gross_profit: grossProfit,

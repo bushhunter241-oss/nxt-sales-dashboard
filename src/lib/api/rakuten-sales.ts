@@ -17,7 +17,7 @@ export async function getRakutenDailySales(params: {
 
   const { data, error } = await query;
   if (error) { console.warn("getRakutenDailySales error:", error); return []; }
-  return data || [];
+  return (data || []).filter((r: any) => !r.rakuten_product?.is_archived);
 }
 
 export async function getAggregatedRakutenDailySales(params: {
@@ -26,7 +26,7 @@ export async function getAggregatedRakutenDailySales(params: {
 }) {
   let query = supabase
     .from("rakuten_daily_sales")
-    .select("date, access_count, orders, sales_amount, units_sold")
+    .select("date, access_count, orders, sales_amount, units_sold, rakuten_product:rakuten_products(is_archived)")
     .order("date", { ascending: true });
 
   if (params.startDate) query = query.gte("date", params.startDate);
@@ -35,7 +35,8 @@ export async function getAggregatedRakutenDailySales(params: {
   const { data, error } = await query;
   if (error) { console.warn("getAggregatedRakutenDailySales error:", error); return []; }
 
-  const grouped = (data || []).reduce((acc: Record<string, any>, row) => {
+  const grouped = (data || []).reduce((acc: Record<string, any>, row: any) => {
+    if (row.rakuten_product?.is_archived) return acc;
     if (!acc[row.date]) {
       acc[row.date] = { date: row.date, access_count: 0, orders: 0, sales_amount: 0, units_sold: 0 };
     }
@@ -239,11 +240,11 @@ export async function getRakutenProductSalesSummary(params: {
       };
     }
 
-    let salesAmount = row.sales_amount;
+    const salesAmount = row.sales_amount;
 
-    // 施策カレンダーのセール割引を適用
-    // 1. 商品ID指定の割引を優先チェック
-    // 2. なければグループ指定の割引にフォールバック
+    // 施策カレンダーの割引は利益計算に適用しない（表示用メモのみ）
+    // 理由: API/CSVの sales_amount は既にクーポン控除後の実売値のため、
+    //        施策カレンダーの割引率を重ねて適用すると二重控除になる
     if (row.date) {
       const productSkuId = row.rakuten_product?.product_id;
       const productGroup = row.rakuten_product?.product_group;
@@ -254,9 +255,8 @@ export async function getRakutenProductSalesSummary(params: {
         discountRate = discountByGroup.get(`${row.date}::${productGroup}`);
       }
       if (discountRate && discountRate > 0) {
-        const discount = Math.round(salesAmount * (discountRate / 100));
-        acc[pid].sale_discount += discount;
-        salesAmount -= discount;
+        // sale_discount は参考値として記録のみ（利益計算には使わない）
+        acc[pid].sale_discount += Math.round(salesAmount * (discountRate / 100));
       }
     }
 

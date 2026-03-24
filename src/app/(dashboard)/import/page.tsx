@@ -11,10 +11,11 @@ import { upsertDailySales } from "@/lib/api/sales";
 import { upsertDailyAdvertising } from "@/lib/api/advertising";
 import { updateRakutenAccessData, importRakutenSalesCSV } from "@/lib/api/rakuten-sales";
 import { parseMonthlySummaryCsv, upsertMonthlyOverrides, parseMonthlyAdSummaryCsv, upsertMonthlyAdOverrides } from "@/lib/api/amazon-monthly-overrides";
+import { supabase } from "@/lib/supabase";
 import { Upload, CheckCircle2, AlertCircle } from "lucide-react";
 import Papa from "papaparse";
 
-type ImportType = "business" | "advertising" | "rakuten_access" | "rakuten_sales" | "monthly_summary" | "monthly_ad_summary";
+type ImportType = "business" | "advertising" | "rakuten_access" | "rakuten_sales" | "monthly_summary" | "monthly_ad_summary" | "meta_ads";
 
 export default function ImportPage() {
   const [importType, setImportType] = useState<ImportType>("business");
@@ -172,6 +173,34 @@ export default function ImportPage() {
           });
           imported++;
         }
+      } else if (importType === "meta_ads") {
+        // Meta広告CSV
+        for (const row of rows as any[]) {
+          const date = (row["Day"] || row["日付"] || row["date"] || "").replace(/\//g, "-");
+          if (!date) { skipped++; continue; }
+          const spend = parseFloat((row["Amount spent (JPY)"] || row["Amount spent"] || row["費用"] || row["spend"] || "0").toString().replace(/,/g, "")) || 0;
+          if (spend === 0 && !row["Campaign name"] && !row["キャンペーン名"]) { skipped++; continue; }
+
+          const record = {
+            date,
+            campaign_name: row["Campaign name"] || row["キャンペーン名"] || null,
+            ad_set_name: row["Ad set name"] || row["広告セット名"] || null,
+            ad_name: row["Ad name"] || row["広告名"] || null,
+            impressions: parseInt((row["Impressions"] || row["インプレッション"] || "0").toString().replace(/,/g, "")) || 0,
+            clicks: parseInt((row["Link clicks"] || row["Clicks (all)"] || row["クリック"] || "0").toString().replace(/,/g, "")) || 0,
+            spend: Math.round(spend),
+            purchases: parseInt((row["Purchases"] || row["購入"] || "0").toString().replace(/,/g, "")) || 0,
+            purchase_value: Math.round(parseFloat((row["Purchase ROAS"] || "0").toString().replace(/,/g, "")) * spend) || 0,
+            cpm: parseFloat((row["CPM (cost per 1,000 impressions)"] || row["CPM"] || "0").toString().replace(/,/g, "")) || 0,
+            cpc: parseFloat((row["CPC (cost per link click)"] || row["CPC"] || "0").toString().replace(/,/g, "")) || 0,
+            ctr: parseFloat((row["CTR (link click-through rate)"] || row["CTR"] || "0").toString().replace(/%/g, "")) || 0,
+            roas: parseFloat((row["Purchase ROAS"] || row["ROAS"] || "0").toString().replace(/,/g, "")) || 0,
+          };
+
+          const { error } = await supabase.from("meta_ad_daily").upsert(record, { onConflict: "date,campaign_name,ad_set_name,ad_name" });
+          if (error) { skipped++; console.warn("Meta ad upsert error:", error.message); }
+          else imported++;
+        }
       }
 
       queryClient.invalidateQueries();
@@ -194,6 +223,7 @@ export default function ImportPage() {
     rakuten_sales: "楽天売上CSV",
     monthly_summary: "月別サマリー",
     monthly_ad_summary: "月別広告サマリー",
+    meta_ads: "Meta広告",
   };
 
   return (
@@ -218,6 +248,9 @@ export default function ImportPage() {
         </Button>
         <Button variant={importType === "monthly_ad_summary" ? "default" : "outline"} onClick={() => setImportType("monthly_ad_summary")}>
           🟠 月別広告サマリー
+        </Button>
+        <Button variant={importType === "meta_ads" ? "default" : "outline"} onClick={() => setImportType("meta_ads")}>
+          🔵 Meta広告
         </Button>
       </div>
 
@@ -284,6 +317,13 @@ export default function ImportPage() {
                   <p className="text-xs text-yellow-400">
                     ※ 取り込んだ月別広告費合計が、月別分析ページの広告費に優先表示されます
                   </p>
+                </div>
+              )}
+              {importType === "meta_ads" && (
+                <div className="space-y-1">
+                  <p>Meta Ads Manager → レポート → エクスポート（CSV）</p>
+                  <p className="text-xs">必要な列: Day, Campaign name, Impressions, Link clicks, Amount spent (JPY), Purchases, Purchase ROAS</p>
+                  <p className="text-xs text-yellow-400">※ 通貨はJPY前提です</p>
                 </div>
               )}
               {importType === "rakuten_sales" && (

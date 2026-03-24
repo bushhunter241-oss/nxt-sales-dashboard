@@ -17,7 +17,7 @@ export async function getDailyAdvertising(params: {
 
   const { data, error } = await query;
   if (error) throw error;
-  return data;
+  return (data || []).filter((r: any) => !r.product?.is_archived && !r.product?.is_parent);
 }
 
 export async function getAdSummary(params: {

@@ -7,7 +7,8 @@ export async function getInventory() {
     .select("*, product:products(*)")
     .order("current_stock", { ascending: true });
   if (error) { console.warn("getInventory error:", error); return []; }
-  return data || [];
+  // アーカイブ商品を除外
+  return (data || []).filter((inv: any) => !inv.product?.is_archived);
 }
 
 export async function upsertInventory(inv: Omit<Inventory, "id" | "updated_at">) {

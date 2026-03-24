@@ -14,6 +14,8 @@ export interface Product {
   product_group: string | null;
   parent_asin: string | null;
   is_parent?: boolean;
+  point_rate?: number;
+  commission_rate?: number;
   is_archived: boolean;
   created_at: string;
   updated_at: string;
@@ -90,6 +92,7 @@ export interface MonthlyGoal {
   target_orders: number;
   target_profit: number;
   target_ad_budget: number;
+  channel: string; // "amazon" | "rakuten" | "total"
   created_at: string;
 }
 
@@ -221,4 +224,54 @@ export interface RakutenDailyAdvertising {
 
 export interface RakutenDailySalesWithProduct extends RakutenDailySales {
   rakuten_product: RakutenProduct;
+}
+
+// ── Shopify ──────────────────────────────────
+export interface ShopifyDailySales {
+  id: string;
+  date: string;
+  order_id: string | null;
+  product_id: string | null;
+  product_title: string | null;
+  variant_title: string | null;
+  sku: string | null;
+  quantity: number;
+  gross_sales: number;
+  discounts: number;
+  net_sales: number;
+  shipping: number;
+  taxes: number;
+  total_sales: number;
+  created_at: string;
+}
+
+export interface ShopifyDailySummary {
+  id: string;
+  date: string;
+  total_orders: number;
+  total_units: number;
+  gross_sales: number;
+  total_discounts: number;
+  net_sales: number;
+  sessions: number;
+  conversion_rate: number;
+  created_at: string;
+}
+
+export interface MetaAdDaily {
+  id: string;
+  date: string;
+  campaign_name: string | null;
+  ad_set_name: string | null;
+  ad_name: string | null;
+  impressions: number;
+  clicks: number;
+  spend: number;
+  purchases: number;
+  purchase_value: number;
+  cpm: number;
+  cpc: number;
+  ctr: number;
+  roas: number;
+  created_at: string;
 }

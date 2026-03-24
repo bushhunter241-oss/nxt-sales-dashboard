@@ -128,8 +128,8 @@ export function parseMonthlyAdSummaryCsv(csvText: string): MonthlyAdOverride[] {
   const cols = header.split(",");
 
   const idx = {
-    date: cols.findIndex(c => c.includes("日付") || c.includes("Date")),
-    spend: cols.findIndex(c => c.includes("費用") || c.includes("Spend")),
+    date: cols.findIndex(c => c.includes("日付") || c.includes("開始日") || c.includes("Date") || c.includes("Start")),
+    spend: cols.findIndex(c => c.includes("広告費") || c.includes("費用") || c.includes("Spend")),
     sales: cols.findIndex(c => c.includes("売上") || c.includes("Sales")),
     orders: cols.findIndex(c => c.includes("注文") || c.includes("Orders")),
     impressions: cols.findIndex(c => c.includes("インプレッション") || c.includes("Impressions")),
@@ -141,13 +141,25 @@ export function parseMonthlyAdSummaryCsv(csvText: string): MonthlyAdOverride[] {
 
   for (let i = 1; i < lines.length; i++) {
     const row = parseCSVLine(lines[i]);
-    const dateRaw = row[idx.date]?.replace(/"/g, "");
+    const dateRaw = row[idx.date]?.replace(/"/g, "").trim();
     if (!dateRaw) continue;
 
-    // 日付: "2026/01/01" or "2026-01-01" → "2026-01"
-    const dateParts = dateRaw.split(/[\/\-]/);
-    if (dateParts.length < 2) continue;
-    const year_month = `${dateParts[0]}-${dateParts[1].padStart(2, "0")}`;
+    // 日付パース: 複数形式に対応
+    let year_month = "";
+    // "2026/01/01" or "2026-01-01"
+    const isoMatch = dateRaw.match(/^(\d{4})[\/\-](\d{1,2})/);
+    if (isoMatch) {
+      year_month = `${isoMatch[1]}-${isoMatch[2].padStart(2, "0")}`;
+    } else {
+      // "Jan 01, 2026" or "January 01, 2026"
+      const MONTHS: Record<string, string> = { Jan: "01", Feb: "02", Mar: "03", Apr: "04", May: "05", Jun: "06", Jul: "07", Aug: "08", Sep: "09", Oct: "10", Nov: "11", Dec: "12" };
+      const engMatch = dateRaw.match(/^([A-Za-z]{3})\w*\s+\d{1,2},?\s+(\d{4})/);
+      if (engMatch) {
+        const mm = MONTHS[engMatch[1].slice(0, 3)] || "01";
+        year_month = `${engMatch[2]}-${mm}`;
+      }
+    }
+    if (!year_month) continue;
 
     if (!monthMap[year_month]) {
       monthMap[year_month] = {

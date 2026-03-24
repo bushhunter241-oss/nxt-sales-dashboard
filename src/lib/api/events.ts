@@ -30,6 +30,9 @@ export async function createProductEventsBulk(params: {
   event_type: string;
   memo: string;
   product_id?: string | null;
+  title?: string;
+  discount_rate?: number;
+  channel?: string;
 }): Promise<number> {
   const res = await fetch("/api/events", {
     method: "POST",

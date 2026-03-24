@@ -17,7 +17,7 @@ import { Plus, Pencil, Trash2, Archive, RefreshCw, ChevronRight, ChevronDown, Fo
 import { Product, RakutenProduct } from "@/types/database";
 
 // ─── Empty forms ───
-const emptyAmz = { name: "", code: "", asin: "", sku: "", parent_asin: "", product_group: "", selling_price: 0, cost_price: 0, fba_fee_rate: 15, fba_shipping_fee: 0, category: "", is_archived: false };
+const emptyAmz = { name: "", code: "", asin: "", sku: "", parent_asin: "", product_group: "", selling_price: 0, cost_price: 0, fba_fee_rate: 15, fba_shipping_fee: 0, point_rate: 0, category: "", is_archived: false };
 const emptyRkt = { name: "", product_id: "", sku: "", product_group: "", parent_product_id: "", selling_price: 0, cost_price: 0, fee_rate: 10, shipping_fee: 0, category: "", is_archived: false };
 
 // ─── Group selector component ───
@@ -124,7 +124,7 @@ export default function ProductsSettingsPage() {
   const openAmzCreate = () => { setAmzEditing(null); setAmzForm({ ...emptyAmz }); setAmzIsParentOnly(false); setNewGroupMode(false); setAmzDialog(true); };
   const openAmzEdit = (p: Product) => {
     setAmzEditing(p);
-    setAmzForm({ name: p.name, code: p.code || p.asin || "", asin: p.asin || "", sku: p.sku || "", parent_asin: p.parent_asin || "", product_group: p.product_group || "", selling_price: p.selling_price, cost_price: p.cost_price, fba_fee_rate: p.fba_fee_rate, fba_shipping_fee: p.fba_shipping_fee || 0, category: p.category || "", is_archived: p.is_archived });
+    setAmzForm({ name: p.name, code: p.code || p.asin || "", asin: p.asin || "", sku: p.sku || "", parent_asin: p.parent_asin || "", product_group: p.product_group || "", selling_price: p.selling_price, cost_price: p.cost_price, fba_fee_rate: p.fba_fee_rate, fba_shipping_fee: p.fba_shipping_fee || 0, point_rate: p.point_rate || 0, category: p.category || "", is_archived: p.is_archived });
     setAmzIsParentOnly(false); setNewGroupMode(false); setAmzDialog(true);
   };
   const openAmzCreateChild = (parent: Product) => {
@@ -286,7 +286,7 @@ export default function ProductsSettingsPage() {
                           <TableCell><Badge variant="secondary" className="text-xs">{rep.asin || rep.code}</Badge></TableCell>
                           <TableCell className="text-sm">{rep.product_group || "-"}</TableCell>
                           <TableCell className="text-right">{formatCurrency(rep.selling_price)}</TableCell>
-                          <TableCell className="text-right">{formatCurrency(rep.cost_price)}</TableCell>
+                          <TableCell className="text-right">{rep.cost_price > 0 ? formatCurrency(rep.cost_price) : <span className="text-xs text-red-400">⚠ 原価未設定</span>}</TableCell>
                           <TableCell className="text-right">{rep.fba_fee_rate}%</TableCell>
                           <TableCell className="text-right">{(rep.fba_shipping_fee || 0) > 0 ? <span className="text-yellow-400">{formatCurrency(rep.fba_shipping_fee || 0)}/個</span> : <span className="text-xs text-[hsl(var(--muted-foreground))]">未設定</span>}</TableCell>
                           <TableCell>{rep.is_archived ? <Badge variant="secondary">アーカイブ</Badge> : <Badge variant="success">有効</Badge>}</TableCell>
@@ -301,7 +301,7 @@ export default function ProductsSettingsPage() {
                             <TableCell><Badge variant="secondary" className="text-xs">{child.asin || child.code}</Badge></TableCell>
                             <TableCell className="text-sm text-[hsl(var(--muted-foreground))]">{child.product_group || "-"}</TableCell>
                             <TableCell className="text-right text-sm">{formatCurrency(child.selling_price)}</TableCell>
-                            <TableCell className="text-right text-sm">{formatCurrency(child.cost_price)}</TableCell>
+                            <TableCell className="text-right text-sm">{child.cost_price > 0 ? formatCurrency(child.cost_price) : <span className="text-xs text-red-400">⚠ 未設定</span>}</TableCell>
                             <TableCell className="text-right text-sm">{child.fba_fee_rate}%</TableCell>
                             <TableCell className="text-right text-sm">{(child.fba_shipping_fee || 0) > 0 ? <span className="text-yellow-400">{formatCurrency(child.fba_shipping_fee || 0)}/個</span> : <span className="text-xs text-[hsl(var(--muted-foreground))]">未設定</span>}</TableCell>
                             <TableCell>{child.is_archived ? <Badge variant="secondary">アーカイブ</Badge> : <Badge variant="success">有効</Badge>}</TableCell>
@@ -340,6 +340,7 @@ export default function ProductsSettingsPage() {
                     <div><label className="text-sm text-[hsl(var(--muted-foreground))]">原価</label><Input type="number" value={amzForm.cost_price} onChange={e => setAmzForm({ ...amzForm, cost_price: Number(e.target.value) })} /></div>
                     <div><label className="text-sm text-[hsl(var(--muted-foreground))]">紹介料率（%）</label><Input type="number" step="0.1" value={amzForm.fba_fee_rate} onChange={e => setAmzForm({ ...amzForm, fba_fee_rate: Number(e.target.value) })} /></div>
                     <div><label className="text-sm text-[hsl(var(--muted-foreground))]">FBA配送手数料（円/個）</label><Input type="number" value={amzForm.fba_shipping_fee} onChange={e => setAmzForm({ ...amzForm, fba_shipping_fee: Number(e.target.value) })} /></div>
+                    <div><label className="text-sm text-[hsl(var(--muted-foreground))]">ポイント付与率（%）</label><Input type="number" step="0.1" value={amzForm.point_rate} onChange={e => setAmzForm({ ...amzForm, point_rate: Number(e.target.value) })} /></div>
                   </>
                 )}
               </div>
@@ -403,7 +404,7 @@ export default function ProductsSettingsPage() {
                             <TableCell><Badge variant="secondary" className="text-xs">{child.product_id}</Badge></TableCell>
                             <TableCell className="text-sm text-[hsl(var(--muted-foreground))]">{child.product_group || "-"}</TableCell>
                             <TableCell className="text-right text-sm">{formatCurrency(child.selling_price)}</TableCell>
-                            <TableCell className="text-right text-sm">{formatCurrency(child.cost_price)}</TableCell>
+                            <TableCell className="text-right text-sm">{child.cost_price > 0 ? formatCurrency(child.cost_price) : <span className="text-xs text-red-400">⚠ 未設定</span>}</TableCell>
                             <TableCell className="text-right text-sm">{child.fee_rate}%</TableCell>
                             <TableCell className="text-right text-sm">{(child.shipping_fee || 0) > 0 ? <span className="text-yellow-400">{formatCurrency(child.shipping_fee)}/個</span> : <span className="text-xs text-[hsl(var(--muted-foreground))]">未設定</span>}</TableCell>
                             <TableCell>{child.is_archived ? <Badge variant="secondary">アーカイブ</Badge> : <Badge variant="success">有効</Badge>}</TableCell>

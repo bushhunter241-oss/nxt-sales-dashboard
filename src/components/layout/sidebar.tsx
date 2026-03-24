@@ -38,6 +38,16 @@ const navigation: NavEntry[] = [
     ],
   },
   {
+    section: "🟢 Shopify",
+    collapsible: true,
+    defaultOpen: false,
+    items: [
+      { name: "日別分析", href: "/shopify/daily", icon: CalendarDays },
+      { name: "月別分析", href: "/shopify/monthly", icon: CalendarRange },
+      { name: "Meta広告管理", href: "/shopify/meta-ads", icon: Megaphone },
+    ],
+  },
+  {
     section: "在庫",
     items: [
       { name: "在庫管理", href: "/inventory", icon: BoxesIcon },

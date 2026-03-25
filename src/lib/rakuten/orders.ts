@@ -85,9 +85,9 @@ export async function searchOrders(
         dateType: 1,
         startDatetime,
         endDatetime,
-        // 確定済み注文のみ取得（未確定を含めると売上が過大になる）
-        // 700:発送済み, 800:決済確定, 900:発送済み(届済み)
-        orderProgressList: [700, 800, 900],
+        // 確認済み以上の注文を取得
+        // 300:発送待ち, 400:変更確定待ち, 700:発送済み, 800:決済確定, 900:発送済み(届済み)
+        orderProgressList: [300, 400, 700, 800, 900],
         PaginationRequestModel: {
           requestRecordsAmount: pageSize,
           requestPage: page,

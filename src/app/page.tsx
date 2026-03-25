@@ -169,6 +169,9 @@ export default function DashboardPage() {
   const projProfitRate = projection.sales > 0 ? (projection.profit / projection.sales) * 100 : 0;
 
   // ── グループ集計（キャンペーン単位広告費で正確に計算） ──
+  // グループ名の正規化（「feela クッション」→「feela」に統合）
+  const normalizeGroup = (g: string) => g.startsWith("feela") ? "feela" : g;
+
   const groupRanking = useMemo(() => {
     const empty = () => ({ total_sales: 0, total_orders: 0, total_ad_spend: 0, net_profit: 0, gross_profit: 0, total_expenses: 0 });
     const groups: Record<string, { group: string; amazon: ReturnType<typeof empty>; rakuten: ReturnType<typeof empty>; shopify: ReturnType<typeof empty>; total_sales: number; total_orders: number; total_ad_spend: number; net_profit: number }> = {};
@@ -176,7 +179,7 @@ export default function DashboardPage() {
     const hasCampaignData = Object.keys(campaignAdByGroup).length > 0;
 
     for (const p of productSummary as any[]) {
-      const g = p.product?.product_group || "その他"; ensure(g);
+      const g = normalizeGroup(p.product?.product_group || "その他"); ensure(g);
       groups[g].amazon.total_sales += p.total_sales || 0; groups[g].amazon.total_orders += p.total_orders || 0;
       groups[g].amazon.gross_profit += p.gross_profit || 0;
       groups[g].amazon.total_expenses += p.total_expenses || 0;
@@ -194,17 +197,17 @@ export default function DashboardPage() {
       } else {
         // フォールバック: ASIN別合計
         const asinAdSpend = (productSummary as any[])
-          .filter((p: any) => (p.product?.product_group || "その他") === groupName)
+          .filter((p: any) => normalizeGroup(p.product?.product_group || "その他") === groupName)
           .reduce((s: number, p: any) => s + (p.total_ad_spend || 0), 0);
         group.amazon.total_ad_spend = asinAdSpend;
         group.amazon.net_profit = (productSummary as any[])
-          .filter((p: any) => (p.product?.product_group || "その他") === groupName)
+          .filter((p: any) => normalizeGroup(p.product?.product_group || "その他") === groupName)
           .reduce((s: number, p: any) => s + (p.net_profit || 0), 0);
       }
     }
 
     for (const p of rakutenProductSummary as any[]) {
-      const g = p.product?.product_group || "その他"; ensure(g);
+      const g = normalizeGroup(p.product?.product_group || "その他"); ensure(g);
       groups[g].rakuten.total_sales += p.total_sales || 0; groups[g].rakuten.total_orders += p.total_orders || 0;
       groups[g].rakuten.total_ad_spend += p.total_ad_spend || 0; groups[g].rakuten.net_profit += p.net_profit || 0;
       groups[g].total_sales += p.total_sales || 0; groups[g].total_orders += p.total_orders || 0;
@@ -229,8 +232,6 @@ export default function DashboardPage() {
   // ── 目標ゲージ ──
   const goalGaugeData = useMemo(() => {
     const goals = monthlyGoals as any[];
-    // グループ名の正規化（「feela クッション」→「feela」に統合）
-    const normalizeGroup = (g: string) => g.startsWith("feela") ? "feela" : g;
 
     // グループ別の今月売上を計算
     const thisMonthGroupSales: Record<string, number> = {};

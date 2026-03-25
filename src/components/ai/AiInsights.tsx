@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { RefreshCw } from "lucide-react";
@@ -29,10 +29,6 @@ export function AiInsights() {
     }
   };
 
-  useEffect(() => {
-    if (!fetched) fetchInsights();
-  }, []);
-
   return (
     <Card className="mt-6">
       <CardHeader>
@@ -47,7 +43,7 @@ export function AiInsights() {
         </div>
       </CardHeader>
       <CardContent>
-        {loading && !fetched && (
+        {loading && (
           <div className="space-y-3">
             {[1, 2, 3].map(i => (
               <div key={i} className="h-16 rounded-lg bg-[hsl(var(--muted))] animate-pulse" />
@@ -65,6 +61,11 @@ export function AiInsights() {
                 {insight.text}
               </div>
             ))}
+          </div>
+        )}
+        {!loading && !error && !fetched && (
+          <div className="py-4 text-center text-sm text-[hsl(var(--muted-foreground))]">
+            再分析ボタンを押すと分析を開始します
           </div>
         )}
         {!loading && !error && insights.length === 0 && fetched && (

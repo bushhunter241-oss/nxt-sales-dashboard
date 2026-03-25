@@ -20,7 +20,7 @@ export async function getInsightData() {
 
   const s = db();
 
-  const [thisMonthSales, lastMonthSales, thisMonthRktSales, lastMonthRktSales, recent7dAds, prev7dAds, recent7dRktAds, goals, inventory, thisMonthShopify, lastMonthShopify] = await Promise.all([
+  const [thisMonthSales, lastMonthSales, thisMonthRktSales, lastMonthRktSales, recent7dAds, prev7dAds, recent7dRktAds, goals, inventory, thisMonthShopify, lastMonthShopify, campaignAds7d] = await Promise.all([
     s.from("daily_sales").select("sales_amount, orders, product:products(product_group, name, is_archived, is_parent)").gte("date", thisMonthStart).lte("date", today),
     s.from("daily_sales").select("sales_amount, orders, product:products(product_group, name, is_archived, is_parent)").gte("date", lmStart).lte("date", lmEnd),
     s.from("rakuten_daily_sales").select("sales_amount, orders, rakuten_product:rakuten_products(product_group, name, is_archived)").gte("date", thisMonthStart).lte("date", today),
@@ -32,6 +32,7 @@ export async function getInsightData() {
     s.from("inventory").select("current_stock, reorder_point, product:products(name, product_group, is_archived)"),
     s.from("shopify_daily_summary").select("date, net_sales, total_orders").gte("date", thisMonthStart).lte("date", today),
     s.from("shopify_daily_summary").select("date, net_sales, total_orders").gte("date", lmStart).lte("date", lmEnd),
+    s.from("daily_campaign_advertising").select("ad_spend, ad_sales, product_group").gte("date", d7),
   ]);
 
   const groupByChannel = (rows: any[], channel: string, productKey = "product"): GroupChannelData[] => {
@@ -84,6 +85,14 @@ export async function getInsightData() {
       ...adByChannel(recent7dAds.data || [], "Amazon"),
       ...adByChannel(recent7dRktAds.data || [], "楽天", "rakuten_product"),
     ],
+    // キャンペーン単位の正確な広告費（ASIN二重計上なし）
+    campaignAds7d: (campaignAds7d.data || []).reduce((acc: Record<string, { spend: number; sales: number }>, r: any) => {
+      const g = r.product_group || "未分類";
+      if (!acc[g]) acc[g] = { spend: 0, sales: 0 };
+      acc[g].spend += r.ad_spend || 0;
+      acc[g].sales += r.ad_sales || 0;
+      return acc;
+    }, {} as Record<string, { spend: number; sales: number }>),
     prev7dAds: adByChannel(prev7dAds.data || [], "Amazon"),
     shopify: {
       thisMonth: { sales: (thisMonthShopify.data || []).reduce((s: number, d: any) => s + (d.net_sales || 0), 0), orders: (thisMonthShopify.data || []).reduce((s: number, d: any) => s + (d.total_orders || 0), 0) },

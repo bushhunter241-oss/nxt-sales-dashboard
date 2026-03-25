@@ -7,7 +7,7 @@ import { KPICard } from "@/components/layout/kpi-card";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatCurrency, formatPercent, formatNumber, getDateRange } from "@/lib/utils";
-import { getDailyAdvertising, getAdSummary } from "@/lib/api/advertising";
+import { getDailyAdvertising, getAdSummary, getCampaignAdSpendByGroup, getCampaignAdSummary } from "@/lib/api/advertising";
 import { getProductSalesSummary } from "@/lib/api/sales";
 import { getMonthlyAdOverrides } from "@/lib/api/amazon-monthly-overrides";
 import { Megaphone, DollarSign, MousePointerClick, TrendingUp, ShoppingCart } from "lucide-react";
@@ -36,6 +36,16 @@ export default function AdvertisingPage() {
   const { data: adOverrides = {} } = useQuery({
     queryKey: ["monthlyAdOverrides"],
     queryFn: () => getMonthlyAdOverrides(),
+  });
+
+  // キャンペーン単位の広告費（ASIN二重計上回避）
+  const { data: campaignAdSummary } = useQuery({
+    queryKey: ["campaignAdSummary", dateRange],
+    queryFn: () => getCampaignAdSummary(dateRange),
+  });
+  const { data: campaignAdByGroup = {} } = useQuery({
+    queryKey: ["campaignAdByGroup", dateRange],
+    queryFn: () => getCampaignAdSpendByGroup(dateRange),
   });
 
   // 選択期間内の月を列挙してオーバーライドを適用
@@ -73,11 +83,13 @@ export default function AdvertisingPage() {
 
   const totalSales = (productSummary as any[]).reduce((s: number, p: any) => s + p.total_sales, 0);
   const isAdOverridden = overrideAdTotals.hasOverride;
-  const totalAdSpend = isAdOverridden ? overrideAdTotals.ad_spend : (adSummary?.total_ad_spend || 0);
-  const totalAdSales = isAdOverridden ? overrideAdTotals.ad_sales : (adSummary?.total_ad_sales || 0);
-  const totalAdOrders = isAdOverridden ? overrideAdTotals.ad_orders : (adSummary?.total_ad_orders || 0);
-  const totalClicks = isAdOverridden ? overrideAdTotals.clicks : (adSummary?.total_clicks || 0);
-  const totalImpressions = isAdOverridden ? overrideAdTotals.impressions : (adSummary?.total_impressions || 0);
+  // キャンペーン単位 → CSV補正 → ASIN別(フォールバック) の優先順位
+  const campaignTotal = campaignAdSummary || null;
+  const totalAdSpend = isAdOverridden ? overrideAdTotals.ad_spend : (campaignTotal?.total_ad_spend || adSummary?.total_ad_spend || 0);
+  const totalAdSales = isAdOverridden ? overrideAdTotals.ad_sales : (campaignTotal?.total_ad_sales || adSummary?.total_ad_sales || 0);
+  const totalAdOrders = isAdOverridden ? overrideAdTotals.ad_orders : (campaignTotal?.total_ad_orders || adSummary?.total_ad_orders || 0);
+  const totalClicks = isAdOverridden ? overrideAdTotals.clicks : (campaignTotal?.total_clicks || adSummary?.total_clicks || 0);
+  const totalImpressions = isAdOverridden ? overrideAdTotals.impressions : (campaignTotal?.total_impressions || adSummary?.total_impressions || 0);
   const avgAcos = totalAdSales > 0 ? (totalAdSpend / totalAdSales) * 100 : 0;
   const roas = totalAdSpend > 0 ? totalAdSales / totalAdSpend : 0;
   const tacos = totalSales > 0 ? (totalAdSpend / totalSales) * 100 : 0;
@@ -104,8 +116,9 @@ export default function AdvertisingPage() {
       ACOS: d.ad_sales > 0 ? ((d.ad_spend / d.ad_sales) * 100).toFixed(1) : 0,
     }));
 
-  // Aggregate by product_group
-  const groupAgg = (adData as any[]).reduce((acc: Record<string, any>, row: any) => {
+  // Aggregate by product_group（キャンペーン単位データがある場合はそちらを優先）
+  const hasCampaignGroupData = Object.keys(campaignAdByGroup).length > 0;
+  const asinGroupAgg = (adData as any[]).reduce((acc: Record<string, any>, row: any) => {
     const group = row.product?.product_group || row.product?.name || "未分類";
     if (!acc[group]) acc[group] = { group, ad_spend: 0, ad_sales: 0, ad_orders: 0, clicks: 0, impressions: 0, productIds: new Set<string>() };
     acc[group].ad_spend += row.ad_spend;
@@ -116,6 +129,20 @@ export default function AdvertisingPage() {
     if (row.product_id) acc[group].productIds.add(row.product_id);
     return acc;
   }, {});
+
+  // キャンペーン単位データで広告費を上書き
+  const groupAgg = { ...asinGroupAgg };
+  if (hasCampaignGroupData) {
+    for (const [groupName, campData] of Object.entries(campaignAdByGroup as Record<string, any>)) {
+      if (groupAgg[groupName]) {
+        groupAgg[groupName].ad_spend = campData.ad_spend;
+        groupAgg[groupName].ad_sales = campData.ad_sales;
+        groupAgg[groupName].ad_orders = campData.ad_orders;
+      } else {
+        groupAgg[groupName] = { group: groupName, ad_spend: campData.ad_spend, ad_sales: campData.ad_sales, ad_orders: campData.ad_orders, clicks: 0, impressions: 0, productIds: new Set() };
+      }
+    }
+  }
 
   const groupAdData = Object.values(groupAgg).sort((a: any, b: any) => b.ad_spend - a.ad_spend);
 

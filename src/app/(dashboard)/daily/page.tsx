@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatCurrency, formatPercent, formatNumber, formatDate, getDateRange } from "@/lib/utils";
 import { getDailySales } from "@/lib/api/sales";
-import { getDailyAdSpendByDate } from "@/lib/api/advertising";
+import { getDailyAdSpendByDateCampaignLevel } from "@/lib/api/advertising";
 import { DollarSign, TrendingUp, ShoppingCart, BarChart3, Wallet } from "lucide-react";
 import { Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ComposedChart, ReferenceLine } from "recharts";
 import { CHART_COLORS } from "@/lib/constants";
@@ -36,8 +36,8 @@ export default function DailyAnalysisPage() {
   });
 
   const { data: adSpendByDate = {} } = useQuery({
-    queryKey: ["dailyAdSpend", dateRange],
-    queryFn: () => getDailyAdSpendByDate(dateRange),
+    queryKey: ["dailyAdSpendCampaign", dateRange],
+    queryFn: () => getDailyAdSpendByDateCampaignLevel(dateRange),
   });
 
   // Aggregate by date with profit calculation

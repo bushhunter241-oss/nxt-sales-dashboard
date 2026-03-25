@@ -287,4 +287,94 @@ export async function fetchSpProductReport(
   throw new Error("Report generation timed out");
 }
 
+// ============================================
+// Campaign-level report (no ASIN double-counting)
+// ============================================
+
+export interface AdsCampaignReportRow {
+  date?: string;
+  campaignName?: string;
+  campaignId?: string;
+  impressions?: number;
+  clicks?: number;
+  cost?: number;
+  sales7d?: number;
+  purchases7d?: number;
+}
+
+/**
+ * Request a Sponsored Products campaign-level report.
+ * Unlike spAdvertisedProduct, this gives true campaign-level spend
+ * without double-counting across variation ASINs.
+ */
+export async function requestSpCampaignReport(
+  startDate: string,
+  endDate: string
+): Promise<string> {
+  const body = {
+    name: `SP Campaign Report ${startDate} to ${endDate}`,
+    startDate,
+    endDate,
+    configuration: {
+      adProduct: "SPONSORED_PRODUCTS",
+      groupBy: ["campaign"],
+      columns: [
+        "date",
+        "campaignName",
+        "campaignId",
+        "impressions",
+        "clicks",
+        "cost",
+        "purchases7d",
+        "sales7d",
+      ],
+      reportTypeId: "spCampaigns",
+      timeUnit: "DAILY",
+      format: "GZIP_JSON",
+    },
+  };
+
+  const response = await adsApiRequest<ReportResponse>({
+    method: "POST",
+    path: "/reporting/reports",
+    body,
+  });
+
+  return response.reportId;
+}
+
+/**
+ * Request, poll, download campaign-level report
+ */
+export async function fetchSpCampaignReport(
+  startDate: string,
+  endDate: string
+): Promise<AdsCampaignReportRow[]> {
+  const reportId = await requestSpCampaignReport(startDate, endDate);
+
+  let attempts = 0;
+  while (attempts < AMAZON_CONFIG.REPORT_MAX_POLL_ATTEMPTS) {
+    await sleep(AMAZON_CONFIG.REPORT_POLL_INTERVAL_MS);
+
+    const status = await getReportStatus(reportId);
+
+    if (
+      (status.status === "COMPLETED" || status.status === "SUCCESS") &&
+      status.url
+    ) {
+      return downloadReport(status.url);
+    }
+
+    if (status.status === "FAILURE") {
+      throw new Error(
+        `Campaign report failed: ${status.failureReason || "Unknown"}`
+      );
+    }
+
+    attempts++;
+  }
+
+  throw new Error("Campaign report generation timed out");
+}
+
 export type { AdsProfile, ReportStatusResponse };

@@ -8,6 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Select } from "@/components/ui/select";
 import { formatCurrency, formatPercent, formatNumber, getDateRange } from "@/lib/utils";
 import { getProductSalesSummary, getDailySales } from "@/lib/api/sales";
+import { getCampaignAdSpendByGroup } from "@/lib/api/advertising";
 import { getProducts } from "@/lib/api/products";
 import { getBsrRankings } from "@/lib/api/bsr";
 import { getMonthlyGoals } from "@/lib/api/goals";
@@ -65,7 +66,10 @@ interface GroupedProduct {
   unit_profit: number;
 }
 
-function groupProducts(products: any[]): GroupedProduct[] {
+function groupProducts(
+  products: any[],
+  campaignAdByGroup: Record<string, { ad_spend: number; ad_sales: number; ad_orders: number }>
+): GroupedProduct[] {
   const groups: Record<string, GroupedProduct> = {};
   for (const p of products) {
     const key = getGroupKey(p.product);
@@ -86,13 +90,32 @@ function groupProducts(products: any[]): GroupedProduct[] {
     g.total_units += p.total_units || 0;
     g.total_cost += p.total_cost || 0;
     g.total_fba_fee += p.total_fba_fee || 0;
-    g.total_ad_spend += p.total_ad_spend || 0;
+    g.total_ad_spend += p.total_ad_spend || 0; // ASIN別合計（参考値）
     g.total_sessions += p.total_sessions || 0;
     g.gross_profit += p.gross_profit || 0;
-    g.net_profit += p.net_profit || 0;
   }
-  // Calculate rates
+  // キャンペーン単位の広告費でグループ利益を計算（ASIN二重計上を回避）
+  const hasCampaignData = Object.keys(campaignAdByGroup).length > 0;
   for (const g of Object.values(groups)) {
+    const campaignAd = campaignAdByGroup[g.groupKey];
+    if (hasCampaignData && campaignAd) {
+      // キャンペーン広告費を使用（正確な値）
+      g.total_ad_spend = campaignAd.ad_spend;
+      g.net_profit = g.gross_profit - campaignAd.ad_spend;
+    } else if (hasCampaignData) {
+      // キャンペーンデータはあるがこのグループは広告なし
+      g.net_profit = g.gross_profit;
+      g.total_ad_spend = 0;
+    } else {
+      // フォールバック: ASIN別合計を使用（キャンペーンデータ未取得時）
+      const totalExpenses = g.children.reduce((s: number, p: any) => s + (p.total_expenses || 0), 0);
+      g.net_profit = g.gross_profit - g.total_ad_spend - totalExpenses;
+    }
+    // 経費はキャンペーンデータの有無にかかわらず減算
+    if (hasCampaignData) {
+      const totalExpenses = g.children.reduce((s: number, p: any) => s + (p.total_expenses || 0), 0);
+      g.net_profit -= totalExpenses;
+    }
     g.profit_rate = g.total_sales > 0 ? (g.net_profit / g.total_sales) * 100 : 0;
     g.unit_profit = g.total_units > 0 ? Math.round(g.net_profit / g.total_units) : 0;
   }
@@ -122,6 +145,12 @@ export default function ProductAnalysisPage() {
   const { data: allDailySales = [] } = useQuery({
     queryKey: ["allDailySales", dateRange],
     queryFn: () => getDailySales({ ...dateRange }),
+  });
+
+  // キャンペーン単位の広告費（ASIN二重計上回避）
+  const { data: campaignAdByGroup = {} } = useQuery({
+    queryKey: ["campaignAdByGroup", dateRange],
+    queryFn: () => getCampaignAdSpendByGroup(dateRange),
   });
 
   // Current month info for goals/BEP
@@ -340,13 +369,35 @@ export default function ProductAnalysisPage() {
   };
 
   // Individual sorted products
-  const sortedProducts = [...(productSummary as any[])].sort(sortFn);
+  // 子ASINのparent_asinを収集（親ASIN自動判定用）
+  const _childParentAsins = useMemo(() => {
+    const set = new Set<string>();
+    for (const p of productSummary as any[]) { if (p.product?.parent_asin) set.add(p.product.parent_asin); }
+    return set;
+  }, [productSummary]);
 
-  // Grouped products
+  const sortedProducts = [...(productSummary as any[])].filter((p: any) =>
+    !p.product?.is_archived && !p.product?.is_parent && !(p.product?.asin && _childParentAsins.has(p.product.asin))
+  ).sort(sortFn);
+
+  // Grouped products (exclude archived and parent ASINs — auto-detect parents)
   const groupedProducts = useMemo(() => {
-    const groups = groupProducts(productSummary as any[]);
+    const all = productSummary as any[];
+    // 子ASINのparent_asinを収集 → 親ASINを自動判定
+    const childParentAsins = new Set<string>();
+    for (const p of all) {
+      if (p.product?.parent_asin) childParentAsins.add(p.product.parent_asin);
+    }
+    const filtered = all.filter((p: any) => {
+      if (p.product?.is_archived) return false;
+      if (p.product?.is_parent) return false;
+      // is_parent未設定でも、子ASINが参照している親ASINなら除外
+      if (p.product?.asin && childParentAsins.has(p.product.asin)) return false;
+      return true;
+    });
+    const groups = groupProducts(filtered, campaignAdByGroup as Record<string, { ad_spend: number; ad_sales: number; ad_orders: number }>);
     return groups.sort(sortFn);
-  }, [productSummary, sortKey]);
+  }, [productSummary, sortKey, campaignAdByGroup]);
 
   // Toggle expand
   const toggleGroup = (key: string) => {
@@ -366,7 +417,11 @@ export default function ProductAnalysisPage() {
   const totalProfit = sortedProducts.reduce((s, p: any) => s + (p.net_profit || 0), 0);
   const totalCost = sortedProducts.reduce((s, p: any) => s + (p.total_cost || 0), 0);
   const totalFbaFee = sortedProducts.reduce((s, p: any) => s + (p.total_fba_fee || 0), 0);
-  const totalAdSpend = sortedProducts.reduce((s, p: any) => s + (p.total_ad_spend || 0), 0);
+  // キャンペーン単位の広告費合計（二重計上回避）、フォールバック時はASIN合計
+  const campaignAdGroupValues = Object.values(campaignAdByGroup as Record<string, { ad_spend: number }>);
+  const totalAdSpend = campaignAdGroupValues.length > 0
+    ? campaignAdGroupValues.reduce((s, g) => s + g.ad_spend, 0)
+    : sortedProducts.reduce((s, p: any) => s + (p.total_ad_spend || 0), 0);
   const overallProfitRate = totalSales > 0 ? (totalProfit / totalSales) * 100 : 0;
 
   // Profit bar chart data (top 10)

@@ -18,6 +18,27 @@ const MIGRATIONS: Record<string, string> = {
     COMMENT ON COLUMN products.fba_shipping_fee
       IS 'FBA配送手数料（1個あたりの固定額、単位：円）。Amazonが実際に請求するFBA送料。紹介料(fba_fee_rate)とは別。';
   `,
+  "024_daily_campaign_advertising": `
+    CREATE TABLE IF NOT EXISTS daily_campaign_advertising (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      campaign_name TEXT NOT NULL,
+      campaign_id TEXT,
+      date DATE NOT NULL,
+      ad_spend NUMERIC(12,2) NOT NULL DEFAULT 0,
+      ad_sales NUMERIC(12,2) NOT NULL DEFAULT 0,
+      ad_orders INTEGER NOT NULL DEFAULT 0,
+      impressions INTEGER NOT NULL DEFAULT 0,
+      clicks INTEGER NOT NULL DEFAULT 0,
+      acos NUMERIC(10,2) DEFAULT 0,
+      roas NUMERIC(10,2) DEFAULT 0,
+      product_group TEXT,
+      source TEXT DEFAULT 'ads-api',
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(campaign_name, date)
+    );
+    CREATE INDEX IF NOT EXISTS idx_daily_campaign_ad_date ON daily_campaign_advertising(date);
+    CREATE INDEX IF NOT EXISTS idx_daily_campaign_ad_group ON daily_campaign_advertising(product_group);
+  `,
 };
 
 export async function POST(request: NextRequest) {

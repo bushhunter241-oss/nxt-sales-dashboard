@@ -8,12 +8,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatCurrency, formatPercent, formatNumber, getDateRange } from "@/lib/utils";
 import { getAggregatedDailySales, getProductSalesSummary } from "@/lib/api/sales";
-import { getAdSummary, getDailyAdvertising } from "@/lib/api/advertising";
+import { getAdSummary, getDailyAdvertising, getCampaignAdSpendByGroup, getCampaignAdSummary } from "@/lib/api/advertising";
 import { getAggregatedRakutenDailySales, getRakutenProductSalesSummary } from "@/lib/api/rakuten-sales";
 import { getRakutenAdSummary } from "@/lib/api/rakuten-advertising";
 import { getMonthlyGoals } from "@/lib/api/goals";
 import { getInventory } from "@/lib/api/inventory";
-import { getShopifyDailySummary, getMetaAdSummary } from "@/lib/api/shopify-sales";
+import { getShopifyDailySummary, getShopifyDailySalesWithCost, getMetaAdSummary } from "@/lib/api/shopify-sales";
 import { ACOS_TARGETS, classifyCampaign, getGroupTarget } from "@/lib/constants/acos-targets";
 import { DollarSign, ShoppingCart, Megaphone, AlertTriangle, TrendingUp, ChevronDown, ChevronRight, ExternalLink } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, PieChart, Pie, Cell } from "recharts";
@@ -52,9 +52,17 @@ export default function DashboardPage() {
   const { data: monthlyGoals = [] } = useQuery({ queryKey: ["monthlyGoals", currentYearMonth], queryFn: () => getMonthlyGoals(currentYearMonth) });
   // Shopify
   const { data: shopifyDaily = [] } = useQuery({ queryKey: ["shopifyDaily", dateRange], queryFn: () => getShopifyDailySummary(dateRange) });
+  const { data: shopifyCostData = [] } = useQuery({ queryKey: ["shopifyCost", dateRange], queryFn: () => getShopifyDailySalesWithCost(dateRange) });
   const { data: metaAdSummary = { total_spend: 0 } } = useQuery({ queryKey: ["metaAdSummary", dateRange], queryFn: () => getMetaAdSummary(dateRange) });
   const { data: shopifyDailyLM = [] } = useQuery({ queryKey: ["shopifyDailyLM", lastMonthRange], queryFn: () => getShopifyDailySummary(lastMonthRange) });
+  const { data: shopifyCostDataLM = [] } = useQuery({ queryKey: ["shopifyCostLM", lastMonthRange], queryFn: () => getShopifyDailySalesWithCost(lastMonthRange) });
   const { data: metaAdSummaryLM = { total_spend: 0 } } = useQuery({ queryKey: ["metaAdSummaryLM", lastMonthRange], queryFn: () => getMetaAdSummary(lastMonthRange) });
+
+  // キャンペーン単位の広告費（ASIN二重計上回避）
+  const { data: campaignAdByGroup = {} } = useQuery({ queryKey: ["campaignAdByGroup", dateRange], queryFn: () => getCampaignAdSpendByGroup(dateRange) });
+  const { data: campaignAdSummary } = useQuery({ queryKey: ["campaignAdSummary", dateRange], queryFn: () => getCampaignAdSummary(dateRange) });
+  const { data: campaignAdByGroupLM = {} } = useQuery({ queryKey: ["campaignAdByGroupLM", lastMonthRange], queryFn: () => getCampaignAdSpendByGroup(lastMonthRange) });
+  const { data: campaignAdSummaryLM } = useQuery({ queryKey: ["campaignAdSummaryLM", lastMonthRange], queryFn: () => getCampaignAdSummary(lastMonthRange) });
 
   const { data: inventory = [] } = useQuery({ queryKey: ["inventory"], queryFn: getInventory });
   const { data: adDetail = [] } = useQuery({ queryKey: ["adDetail7d"], queryFn: () => getDailyAdvertising({ startDate: new Date(Date.now() - 7 * 86400000).toISOString().split("T")[0] }) });
@@ -62,19 +70,27 @@ export default function DashboardPage() {
   // ── 集計 ──
   const amazonSales = (dailySales as any[]).reduce((s: number, d: any) => s + d.sales_amount, 0);
   const amazonOrders = (dailySales as any[]).reduce((s: number, d: any) => s + d.orders, 0);
-  const amazonAdSpend = adSummary?.total_ad_spend || 0;
-  const amazonProfit = (productSummary as any[]).reduce((s: number, p: any) => s + (p.net_profit || 0), 0);
+  // キャンペーン単位の広告費を使用（ASIN二重計上回避）
+  const amazonAdSpend = campaignAdSummary?.total_ad_spend || adSummary?.total_ad_spend || 0;
+  // 利益もキャンペーン単位で再計算（gross_profit - campaign_ad_spend - expenses）
+  const amazonGrossProfit = (productSummary as any[]).reduce((s: number, p: any) => s + (p.gross_profit || 0), 0);
+  const amazonExpenses = (productSummary as any[]).reduce((s: number, p: any) => s + (p.total_expenses || 0), 0);
+  const amazonProfit = campaignAdSummary ? (amazonGrossProfit - campaignAdSummary.total_ad_spend - amazonExpenses)
+    : (productSummary as any[]).reduce((s: number, p: any) => s + (p.net_profit || 0), 0);
 
   const rktSales = (rakutenDailySales as any[]).reduce((s: number, d: any) => s + d.sales_amount, 0);
   const rktOrders = (rakutenDailySales as any[]).reduce((s: number, d: any) => s + d.orders, 0);
   const rktAdSpend = rakutenAdSummary?.total_ad_spend || 0;
   const rktProfit = (rakutenProductSummary as any[]).reduce((s: number, p: any) => s + (p.net_profit || 0), 0);
 
-  // Shopify
+  // Shopify（原価・決済手数料を含む正確な利益計算）
   const shopifySales = (shopifyDaily as any[]).reduce((s: number, d: any) => s + (d.net_sales || 0), 0);
   const shopifyOrders = (shopifyDaily as any[]).reduce((s: number, d: any) => s + (d.total_orders || 0), 0);
   const shopifyAdSpend = metaAdSummary?.total_spend || 0;
-  const shopifyProfit = shopifySales - shopifyAdSpend; // 簡易計算（詳細は商品別で）
+  const shopifyCost = (shopifyCostData as any[]).reduce((s: number, r: any) => s + ((r.product?.cost_price || 0) * (r.quantity || 0)), 0);
+  const shopifyCommission = (shopifyCostData as any[]).reduce((s: number, r: any) => s + Math.round((r.net_sales || 0) * ((r.product?.commission_rate || 3.55) / 100)), 0);
+  const shopifyShipping = (shopifyCostData as any[]).reduce((s: number, r: any) => s + ((r.product?.fba_shipping_fee || 0) * (r.quantity || 0)), 0);
+  const shopifyProfit = shopifySales - shopifyCost - shopifyCommission - shopifyShipping - shopifyAdSpend;
 
   const totalSales = amazonSales + rktSales + shopifySales;
   const totalOrders = amazonOrders + rktOrders + shopifyOrders;
@@ -86,10 +102,18 @@ export default function DashboardPage() {
   const lmShopifySales = (shopifyDailyLM as any[]).reduce((s: number, d: any) => s + (d.net_sales || 0), 0);
   const lmShopifyOrders = (shopifyDailyLM as any[]).reduce((s: number, d: any) => s + (d.total_orders || 0), 0);
   const lmShopifyAdSpend = metaAdSummaryLM?.total_spend || 0;
+  const lmShopifyCost = (shopifyCostDataLM as any[]).reduce((s: number, r: any) => s + ((r.product?.cost_price || 0) * (r.quantity || 0)), 0);
+  const lmShopifyCommission = (shopifyCostDataLM as any[]).reduce((s: number, r: any) => s + Math.round((r.net_sales || 0) * ((r.product?.commission_rate || 3.55) / 100)), 0);
+  const lmShopifyShipping = (shopifyCostDataLM as any[]).reduce((s: number, r: any) => s + ((r.product?.fba_shipping_fee || 0) * (r.quantity || 0)), 0);
   const lmSales = (lastMonthDailySales as any[]).reduce((s: number, d: any) => s + d.sales_amount, 0) + (lastMonthRakutenDailySales as any[]).reduce((s: number, d: any) => s + d.sales_amount, 0) + lmShopifySales;
   const lmOrders = (lastMonthDailySales as any[]).reduce((s: number, d: any) => s + d.orders, 0) + (lastMonthRakutenDailySales as any[]).reduce((s: number, d: any) => s + d.orders, 0) + lmShopifyOrders;
-  const lmAdSpend = (lastMonthAdSummary?.total_ad_spend || 0) + (lastMonthRakutenAdSummary?.total_ad_spend || 0) + lmShopifyAdSpend;
-  const lmProfit = (lastMonthProductSummary as any[]).reduce((s: number, p: any) => s + (p.net_profit || 0), 0) + (lastMonthRakutenProductSummary as any[]).reduce((s: number, p: any) => s + (p.net_profit || 0), 0) + (lmShopifySales - lmShopifyAdSpend);
+  const lmAmazonAdSpend = campaignAdSummaryLM?.total_ad_spend || lastMonthAdSummary?.total_ad_spend || 0;
+  const lmAdSpend = lmAmazonAdSpend + (lastMonthRakutenAdSummary?.total_ad_spend || 0) + lmShopifyAdSpend;
+  const lmAmazonGrossProfit = (lastMonthProductSummary as any[]).reduce((s: number, p: any) => s + (p.gross_profit || 0), 0);
+  const lmAmazonExpenses = (lastMonthProductSummary as any[]).reduce((s: number, p: any) => s + (p.total_expenses || 0), 0);
+  const lmAmazonProfit = campaignAdSummaryLM ? (lmAmazonGrossProfit - campaignAdSummaryLM.total_ad_spend - lmAmazonExpenses)
+    : (lastMonthProductSummary as any[]).reduce((s: number, p: any) => s + (p.net_profit || 0), 0);
+  const lmProfit = lmAmazonProfit + (lastMonthRakutenProductSummary as any[]).reduce((s: number, p: any) => s + (p.net_profit || 0), 0) + (lmShopifySales - lmShopifyCost - lmShopifyCommission - lmShopifyShipping - lmShopifyAdSpend);
   const lmProfitRate = lmSales > 0 ? (lmProfit / lmSales) * 100 : 0;
 
   // ── スパークライン ──
@@ -144,26 +168,48 @@ export default function DashboardPage() {
   }, [dailySales, rakutenDailySales, totalSales, totalOrders, totalAdSpend, totalProfit]);
   const projProfitRate = projection.sales > 0 ? (projection.profit / projection.sales) * 100 : 0;
 
-  // ── グループ集計 ──
+  // ── グループ集計（キャンペーン単位広告費で正確に計算） ──
   const groupRanking = useMemo(() => {
-    const empty = () => ({ total_sales: 0, total_orders: 0, total_ad_spend: 0, net_profit: 0 });
+    const empty = () => ({ total_sales: 0, total_orders: 0, total_ad_spend: 0, net_profit: 0, gross_profit: 0, total_expenses: 0 });
     const groups: Record<string, { group: string; amazon: ReturnType<typeof empty>; rakuten: ReturnType<typeof empty>; shopify: ReturnType<typeof empty>; total_sales: number; total_orders: number; total_ad_spend: number; net_profit: number }> = {};
     const ensure = (g: string) => { if (!groups[g]) groups[g] = { group: g, amazon: empty(), rakuten: empty(), shopify: empty(), total_sales: 0, total_orders: 0, total_ad_spend: 0, net_profit: 0 }; };
+    const hasCampaignData = Object.keys(campaignAdByGroup).length > 0;
+
     for (const p of productSummary as any[]) {
       const g = p.product?.product_group || "その他"; ensure(g);
       groups[g].amazon.total_sales += p.total_sales || 0; groups[g].amazon.total_orders += p.total_orders || 0;
-      groups[g].amazon.total_ad_spend += p.total_ad_spend || 0; groups[g].amazon.net_profit += p.net_profit || 0;
+      groups[g].amazon.gross_profit += p.gross_profit || 0;
+      groups[g].amazon.total_expenses += p.total_expenses || 0;
       groups[g].total_sales += p.total_sales || 0; groups[g].total_orders += p.total_orders || 0;
-      groups[g].total_ad_spend += p.total_ad_spend || 0; groups[g].net_profit += p.net_profit || 0;
     }
+    // Amazon: キャンペーン単位の広告費でグループ利益を計算
+    for (const [groupName, group] of Object.entries(groups)) {
+      const campAd = (campaignAdByGroup as any)[groupName];
+      if (hasCampaignData && campAd) {
+        group.amazon.total_ad_spend = campAd.ad_spend;
+        group.amazon.net_profit = group.amazon.gross_profit - campAd.ad_spend - group.amazon.total_expenses;
+      } else if (hasCampaignData) {
+        group.amazon.total_ad_spend = 0;
+        group.amazon.net_profit = group.amazon.gross_profit - group.amazon.total_expenses;
+      } else {
+        // フォールバック: ASIN別合計
+        const asinAdSpend = (productSummary as any[])
+          .filter((p: any) => (p.product?.product_group || "その他") === groupName)
+          .reduce((s: number, p: any) => s + (p.total_ad_spend || 0), 0);
+        group.amazon.total_ad_spend = asinAdSpend;
+        group.amazon.net_profit = (productSummary as any[])
+          .filter((p: any) => (p.product?.product_group || "その他") === groupName)
+          .reduce((s: number, p: any) => s + (p.net_profit || 0), 0);
+      }
+    }
+
     for (const p of rakutenProductSummary as any[]) {
       const g = p.product?.product_group || "その他"; ensure(g);
       groups[g].rakuten.total_sales += p.total_sales || 0; groups[g].rakuten.total_orders += p.total_orders || 0;
       groups[g].rakuten.total_ad_spend += p.total_ad_spend || 0; groups[g].rakuten.net_profit += p.net_profit || 0;
       groups[g].total_sales += p.total_sales || 0; groups[g].total_orders += p.total_orders || 0;
-      groups[g].total_ad_spend += p.total_ad_spend || 0; groups[g].net_profit += p.net_profit || 0;
     }
-    // Shopify売上をfeelaグループに加算（Shopify=feela.専用）
+    // Shopify
     if (shopifySales > 0) {
       const g = "feela"; ensure(g);
       groups[g].shopify.total_sales += shopifySales;
@@ -171,22 +217,29 @@ export default function DashboardPage() {
       groups[g].shopify.total_ad_spend += shopifyAdSpend;
       groups[g].shopify.net_profit += shopifyProfit;
       groups[g].total_sales += shopifySales; groups[g].total_orders += shopifyOrders;
-      groups[g].total_ad_spend += shopifyAdSpend; groups[g].net_profit += shopifyProfit;
+    }
+    // グループ合計を再計算
+    for (const group of Object.values(groups)) {
+      group.total_ad_spend = group.amazon.total_ad_spend + group.rakuten.total_ad_spend + group.shopify.total_ad_spend;
+      group.net_profit = group.amazon.net_profit + group.rakuten.net_profit + group.shopify.net_profit;
     }
     return Object.values(groups).sort((a, b) => b.total_sales - a.total_sales);
-  }, [productSummary, rakutenProductSummary, shopifySales, shopifyOrders, shopifyAdSpend, shopifyProfit]);
+  }, [productSummary, rakutenProductSummary, shopifySales, shopifyOrders, shopifyAdSpend, shopifyProfit, campaignAdByGroup]);
 
   // ── 目標ゲージ ──
   const goalGaugeData = useMemo(() => {
     const goals = monthlyGoals as any[];
+    // グループ名の正規化（「feela クッション」→「feela」に統合）
+    const normalizeGroup = (g: string) => g.startsWith("feela") ? "feela" : g;
+
     // グループ別の今月売上を計算
     const thisMonthGroupSales: Record<string, number> = {};
     for (const p of productSummary as any[]) {
-      const g = p.product?.product_group || "その他";
+      const g = normalizeGroup(p.product?.product_group || "その他");
       thisMonthGroupSales[g] = (thisMonthGroupSales[g] || 0) + (p.total_sales || 0);
     }
     for (const p of rakutenProductSummary as any[]) {
-      const g = p.product?.product_group || "その他";
+      const g = normalizeGroup(p.product?.product_group || "その他");
       thisMonthGroupSales[g] = (thisMonthGroupSales[g] || 0) + (p.total_sales || 0);
     }
     // Shopify売上をfeelaに加算
@@ -197,30 +250,51 @@ export default function DashboardPage() {
     const dayOfMonth = now.getDate();
     const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
 
-    // channel='total'（または未設定=旧データ）の目標のみ対象
-    const totalGoals = goals.filter((g: any) =>
-      g.product_group && !g.product_id && (!g.channel || g.channel === "total")
-    );
+    // グループごとにtotal目標を算出（channel=total優先、なければチャネル別合計）
+    const groupGoalMap: Record<string, number> = {};
+    const channelGoals: Record<string, Record<string, number>> = {};
 
-    // 目標があるグループ
-    const result = totalGoals.map((g: any) => {
-      const currentSales = thisMonthGroupSales[g.product_group] || 0;
+    for (const g of goals.filter((g: any) => g.product_group && !g.product_id)) {
+      const pg = g.product_group;
+      const ch = g.channel || "total";
+      if (ch === "total") {
+        groupGoalMap[pg] = (g.target_sales || 0);
+      } else {
+        if (!channelGoals[pg]) channelGoals[pg] = {};
+        channelGoals[pg][ch] = (channelGoals[pg][ch] || 0) + (g.target_sales || 0);
+      }
+    }
+
+    // total未設定のグループはチャネル別合計を使用
+    for (const [pg, channels] of Object.entries(channelGoals)) {
+      if (!groupGoalMap[pg] || groupGoalMap[pg] === 0) {
+        const sum = Object.values(channels).reduce((s, v) => s + v, 0);
+        if (sum > 0) groupGoalMap[pg] = sum;
+      }
+    }
+
+    // 結果を生成
+    const result: Array<{ group: string; target: number; currentSales: number; projected: number; pct: number; hasGoal: boolean }> = [];
+    const processedGroups = new Set<string>();
+
+    for (const [pg, target] of Object.entries(groupGoalMap)) {
+      processedGroups.add(pg);
+      const currentSales = thisMonthGroupSales[pg] || 0;
       const projected = dayOfMonth > 0 ? Math.round(currentSales / dayOfMonth * daysInMonth) : 0;
-      const pct = g.target_sales > 0 ? (projected / g.target_sales) * 100 : 0;
-      return { group: g.product_group, target: g.target_sales, currentSales, projected, pct, hasGoal: true };
-    });
+      const pct = target > 0 ? (projected / target) * 100 : 0;
+      result.push({ group: pg, target, currentSales, projected, pct, hasGoal: true });
+    }
 
     // 売上があるが目標未設定のグループを追加
-    const goalGroups = new Set(totalGoals.map((g: any) => g.product_group));
     for (const [group, sales] of Object.entries(thisMonthGroupSales)) {
-      if (!goalGroups.has(group) && sales > 0) {
+      if (!processedGroups.has(group) && sales > 0) {
         const projected = dayOfMonth > 0 ? Math.round(sales / dayOfMonth * daysInMonth) : 0;
         result.push({ group, target: 0, currentSales: sales, projected, pct: 0, hasGoal: false });
       }
     }
 
     return result.sort((a, b) => b.projected - a.projected);
-  }, [monthlyGoals, productSummary, rakutenProductSummary]);
+  }, [monthlyGoals, productSummary, rakutenProductSummary, shopifySales]);
 
   // ── アラート ──
   const alerts = useMemo(() => {

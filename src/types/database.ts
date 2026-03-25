@@ -206,6 +206,24 @@ export interface RakutenDailySales {
   created_at: string;
 }
 
+// キャンペーン単位の広告データ（ASIN二重計上を防ぐため）
+export interface DailyCampaignAdvertising {
+  id: string;
+  campaign_name: string;
+  campaign_id: string | null;
+  date: string;
+  ad_spend: number;
+  ad_sales: number;
+  ad_orders: number;
+  impressions: number;
+  clicks: number;
+  acos: number;
+  roas: number;
+  product_group: string | null;
+  source: string;
+  created_at: string;
+}
+
 export interface RakutenDailyAdvertising {
   id: string;
   product_id: string;

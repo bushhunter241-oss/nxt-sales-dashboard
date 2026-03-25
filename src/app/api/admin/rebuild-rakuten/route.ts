@@ -114,20 +114,19 @@ async function cleanupTables() {
 }
 
 async function resyncOrders(startDate: string, endDate: string) {
-  // 認証情報取得
+  // 認証情報取得（rakuten_api_credentialsテーブル）
   const { data: cred } = await supabase
-    .from("api_credentials")
-    .select("credentials")
-    .eq("service", "rakuten_rms")
+    .from("rakuten_api_credentials")
+    .select("service_secret, license_key")
     .maybeSingle();
 
-  if (!cred?.credentials) {
-    return { error: "楽天RMS認証情報が見つかりません。api_credentialsテーブルを確認してください。" };
+  if (!cred?.service_secret || !cred?.license_key) {
+    return { error: "楽天RMS認証情報が見つかりません。設定画面から登録してください。" };
   }
 
   const rakutenCreds: RakutenCreds = {
-    serviceSecret: cred.credentials.serviceSecret || cred.credentials.service_secret,
-    licenseKey: cred.credentials.licenseKey || cred.credentials.license_key,
+    serviceSecret: cred.service_secret,
+    licenseKey: cred.license_key,
   };
 
   // 1日ずつ同期（タイムアウト防止）

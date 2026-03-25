@@ -10,7 +10,7 @@ import { supabase } from "@/lib/supabase";
 // 商品マスタ: manageNumber = product_id
 const RAKUTEN_PRODUCTS = [
   {
-    id: undefined as string | undefined,
+    id: "f1ee1a01-0000-0000-0000-000000000001", // feela01 固定UUID
     name: "feela シートクッション",
     product_id: "feela01",
     product_group: "feela",
@@ -58,7 +58,7 @@ const RAKUTEN_PRODUCTS = [
     is_archived: false,
   },
   {
-    id: undefined as string | undefined,
+    id: "imin05-0000-0000-0000-000000000005", // imin05 固定UUID
     name: "imin 浄化パウダー・その他",
     product_id: "imin05",
     product_group: "imin05",
@@ -70,7 +70,7 @@ const RAKUTEN_PRODUCTS = [
     is_archived: false,
   },
   {
-    id: undefined as string | undefined,
+    id: "imin06-0000-0000-0000-000000000006", // imin06 固定UUID
     name: "imin ライター",
     product_id: "imin06",
     product_group: "imin06",
@@ -117,16 +117,10 @@ const RAKUTEN_SKU_COSTS = [
 
 export async function POST() {
   try {
-    // 1. 商品マスタ登録（idが指定されているものはそのUUIDで登録）
-    const productsToInsert = RAKUTEN_PRODUCTS.map(p => {
-      const record: any = { ...p };
-      if (!record.id) delete record.id; // UUIDが未指定ならDBに自動生成させる
-      return record;
-    });
-
+    // 1. 商品マスタ登録（全商品固定UUIDで登録）
     const { data: products, error: prodError } = await supabase
       .from("rakuten_products")
-      .upsert(productsToInsert, { onConflict: "product_id" })
+      .upsert(RAKUTEN_PRODUCTS, { onConflict: "product_id" })
       .select("id, name, product_id, product_group, cost_price, shipping_fee");
 
     if (prodError) {

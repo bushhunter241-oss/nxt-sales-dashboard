@@ -3,7 +3,7 @@ import { supabase } from "@/lib/supabase";
 import { syncRakutenSales } from "@/lib/rakuten/sync";
 import { fetchRakutenOrders } from "@/lib/rakuten/orders";
 
-export const maxDuration = 120;
+export const maxDuration = 300;
 
 /** 日付文字列を1日進める */
 function nextDay(dateStr: string): string {
@@ -29,10 +29,9 @@ function daysBetween(from: string, to: string): number {
 export async function POST(request: Request) {
   try {
     const body = await request.json().catch(() => ({}));
-    const { dateFrom, dateTo } = body as {
-      dateFrom?: string;
-      dateTo?: string;
-    };
+    // dateFrom/dateTo と startDate/endDate の両方を受け付ける
+    const dateFrom = body.dateFrom || body.startDate;
+    const dateTo = body.dateTo || body.endDate;
 
     // デフォルト: 昨日
     const yesterday = new Date();

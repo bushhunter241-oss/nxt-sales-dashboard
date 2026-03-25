@@ -118,7 +118,7 @@ export async function searchOrders(
     page++;
 
     if (hasMore) {
-      await new Promise((r) => setTimeout(r, 500));
+      await new Promise((r) => setTimeout(r, 200));
     }
   }
 
@@ -168,7 +168,7 @@ export async function getOrders(
     }
 
     if (i + 100 < orderNumbers.length) {
-      await new Promise((r) => setTimeout(r, 500));
+      await new Promise((r) => setTimeout(r, 200));
     }
   }
 

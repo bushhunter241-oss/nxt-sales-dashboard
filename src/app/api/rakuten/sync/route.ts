@@ -77,8 +77,8 @@ export async function POST(request: Request) {
 
     let currentDate = from;
     while (currentDate <= to) {
-      // タイムアウト防止: 100秒経過したら中断
-      if (Date.now() - startTime > 100000) {
+      // タイムアウト防止: 250秒経過したら中断（maxDuration=300s）
+      if (Date.now() - startTime > 250000) {
         return NextResponse.json({
           success: true,
           message: `時間切れ: ${processedDays}/${totalDays}日処理完了 (${from}〜${currentDate}), 受注${totalOrders}件, 売上${totalSales}件登録`,

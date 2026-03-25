@@ -259,21 +259,43 @@ async function upsertDailySales(entries: AggEntry[]): Promise<number> {
     const dbProductId = idMap.get(entry.product_id);
     if (!dbProductId) continue;
 
-    const { error } = await supabase
+    // 既存レコードを確認（access_count/cvrを保持するため）
+    const { data: existing } = await supabase
       .from("rakuten_daily_sales")
-      .upsert({
-        product_id: dbProductId,
-        date: entry.date,
-        access_count: 0, // 受注APIではアクセス数取得不可
-        orders: entry.orders,
-        sales_amount: entry.sales_amount,
-        units_sold: entry.units_sold,
-        cvr: 0,
-        cancellations: 0,
-        source: "api" as const,
-      }, {
-        onConflict: "product_id,date",
-      });
+      .select("id, access_count, cvr")
+      .eq("product_id", dbProductId)
+      .eq("date", entry.date)
+      .maybeSingle();
+
+    let error;
+    if (existing) {
+      // 既存レコードあり: access_count/cvrを保持して売上データのみ更新
+      ({ error } = await supabase
+        .from("rakuten_daily_sales")
+        .update({
+          orders: entry.orders,
+          sales_amount: entry.sales_amount,
+          units_sold: entry.units_sold,
+          cancellations: 0,
+          source: "api" as const,
+        })
+        .eq("id", existing.id));
+    } else {
+      // 新規レコード
+      ({ error } = await supabase
+        .from("rakuten_daily_sales")
+        .insert({
+          product_id: dbProductId,
+          date: entry.date,
+          access_count: 0,
+          orders: entry.orders,
+          sales_amount: entry.sales_amount,
+          units_sold: entry.units_sold,
+          cvr: 0,
+          cancellations: 0,
+          source: "api" as const,
+        }));
+    }
 
     if (error) {
       console.error(`売上upsertエラー (${entry.product_id} ${entry.date}):`, error);

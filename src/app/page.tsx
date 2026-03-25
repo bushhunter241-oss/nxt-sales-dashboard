@@ -256,10 +256,10 @@ export default function DashboardPage() {
     const channelGoals: Record<string, Record<string, number>> = {};
 
     for (const g of goals.filter((g: any) => g.product_group && !g.product_id)) {
-      const pg = g.product_group;
+      const pg = normalizeGroup(g.product_group);
       const ch = g.channel || "total";
       if (ch === "total") {
-        groupGoalMap[pg] = (g.target_sales || 0);
+        groupGoalMap[pg] = (groupGoalMap[pg] || 0) + (g.target_sales || 0);
       } else {
         if (!channelGoals[pg]) channelGoals[pg] = {};
         channelGoals[pg][ch] = (channelGoals[pg][ch] || 0) + (g.target_sales || 0);
@@ -286,9 +286,9 @@ export default function DashboardPage() {
       result.push({ group: pg, target, currentSales, projected, pct, hasGoal: true });
     }
 
-    // 売上があるが目標未設定のグループを追加
+    // 売上があるが目標未設定のグループを追加（「その他」は除外）
     for (const [group, sales] of Object.entries(thisMonthGroupSales)) {
-      if (!processedGroups.has(group) && sales > 0) {
+      if (!processedGroups.has(group) && sales > 0 && group !== "その他") {
         const projected = dayOfMonth > 0 ? Math.round(sales / dayOfMonth * daysInMonth) : 0;
         result.push({ group, target: 0, currentSales: sales, projected, pct: 0, hasGoal: false });
       }
@@ -315,8 +315,9 @@ export default function DashboardPage() {
     const adRows = adDetail as any[];
     const groupAdAgg: Record<string, { spend: number; sales: number; campaigns: Record<string, { spend: number; sales: number; name: string }> }> = {};
     for (const row of adRows) {
-      const g = row.product?.product_group;
-      if (!g) continue;
+      const rawG = row.product?.product_group;
+      if (!rawG) continue;
+      const g = normalizeGroup(rawG);
       if (!groupAdAgg[g]) groupAdAgg[g] = { spend: 0, sales: 0, campaigns: {} };
       groupAdAgg[g].spend += row.ad_spend || 0;
       groupAdAgg[g].sales += row.ad_sales || 0;

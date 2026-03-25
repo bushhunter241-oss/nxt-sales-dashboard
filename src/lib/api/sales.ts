@@ -96,6 +96,23 @@ export async function getProductSalesSummary(params: {
     adByProduct[row.product_id].ad_sales += row.ad_sales;
   }
 
+  // 2b. Fetch expenses data for the same period
+  let expQuery = supabase
+    .from("expenses")
+    .select("product_id, amount");
+
+  if (params.startDate) expQuery = expQuery.gte("date", params.startDate);
+  if (params.endDate) expQuery = expQuery.lte("date", params.endDate);
+
+  const { data: expData } = await expQuery;
+
+  // Aggregate expenses by product (product_id=null は全体経費として各商品には加算しない)
+  const expByProduct: Record<string, number> = {};
+  for (const row of expData || []) {
+    if (!row.product_id) continue;
+    expByProduct[row.product_id] = (expByProduct[row.product_id] || 0) + row.amount;
+  }
+
   // 3. Group sales by product and calculate profit
   const grouped = (data || []).reduce((acc: Record<string, any>, row: any) => {
     const pid = row.product_id;
@@ -116,7 +133,7 @@ export async function getProductSalesSummary(params: {
   }, {});
 
   // 4. Calculate profit for each product
-  return Object.values(grouped).map((item: any) => {
+  const result = Object.values(grouped).map((item: any) => {
     const product = item.product;
     const costPrice = product?.cost_price || 0;
     // fba_fee_rate = Amazon紹介料率（%）例: 15 → 売上の15%
@@ -138,11 +155,13 @@ export async function getProductSalesSummary(params: {
     // ポイント原資 = 売上 × ポイント付与率
     const totalPointCost = Math.round(item.total_sales * (pointRate / 100));
     const totalAdSpend = ad.ad_spend;
+    // 経費（VINE費用・その他）
+    const totalExpenses = expByProduct[product?.id] || 0;
 
     // Gross profit = 売上 - 原価 - 紹介料 - FBA配送手数料 - ポイント原資
     const grossProfit = item.total_sales - totalCost - totalFbaFee - totalPointCost;
-    // Net profit = Gross Profit - 広告費
-    const netProfit = grossProfit - totalAdSpend;
+    // Net profit = Gross Profit - 広告費 - 経費
+    const netProfit = grossProfit - totalAdSpend - totalExpenses;
     // Profit rate
     const profitRate = item.total_sales > 0 ? (netProfit / item.total_sales) * 100 : 0;
     // Unit profit
@@ -157,10 +176,23 @@ export async function getProductSalesSummary(params: {
       total_point_cost: totalPointCost,
       total_ad_spend: totalAdSpend,
       total_ad_sales: ad.ad_sales,
+      total_expenses: totalExpenses,
       gross_profit: grossProfit,
       net_profit: netProfit,
       profit_rate: profitRate,
       unit_profit: unitProfit,
     };
+  });
+
+  // 子ASINが参照する親ASINを自動判定して除外
+  const childParentAsins = new Set<string>();
+  for (const item of result) {
+    if ((item as any).product?.parent_asin) childParentAsins.add((item as any).product.parent_asin);
+  }
+  return result.filter((item: any) => {
+    if (item.product?.is_archived) return false;
+    if (item.product?.is_parent) return false;
+    if (item.product?.asin && childParentAsins.has(item.product.asin)) return false;
+    return true;
   });
 }

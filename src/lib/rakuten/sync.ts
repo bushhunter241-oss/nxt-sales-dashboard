@@ -362,7 +362,16 @@ export async function syncRakutenSales(
     }
 
     // 2. 日別×商品で集計
-    const entries = aggregateOrders(orders);
+    const allEntries = aggregateOrders(orders);
+
+    // 防御: 注文日が指定範囲外のエントリを除外（API応答に範囲外データが混入するケース対策）
+    const entries = allEntries.filter(e => {
+      if (e.date < dateFrom || e.date > dateTo) {
+        console.warn(`範囲外の注文日を除外: ${e.date} (指定範囲: ${dateFrom}〜${dateTo}), product=${e.product_id}`);
+        return false;
+      }
+      return true;
+    });
 
     // 3. 商品マスタ登録
     const productsUpserted = await upsertProducts(entries);

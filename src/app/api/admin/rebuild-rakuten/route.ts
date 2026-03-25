@@ -41,7 +41,19 @@ export async function POST(req: Request) {
       const seedRes = await fetch(new URL("/api/admin/seed-rakuten-products", req.url), {
         method: "POST",
       });
-      results.seed = await seedRes.json();
+      const seedJson = await seedRes.json();
+      results.seed = seedJson;
+
+      // seedが失敗したらresyncを実行しない（resyncが先に商品レコードを作るとUUIDが狂う）
+      if (step === "all" && seedJson.success === false) {
+        return NextResponse.json({
+          success: false,
+          step,
+          dateRange: { startDate, endDate },
+          results,
+          error: "seedが失敗したためresyncを中止しました。seedのエラーを修正してから再実行してください。",
+        });
+      }
     }
 
     // Step 4: RMS Order APIで再取得

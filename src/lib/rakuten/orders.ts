@@ -85,10 +85,9 @@ export async function searchOrders(
         dateType: 1,
         startDatetime,
         endDatetime,
-        // キャンセル済み(500/600)を除外し、有効な注文のみ取得
-        // 100:注文確認待ち, 200:楽天処理中, 300:発送待ち, 400:変更確定待ち,
+        // 確定済み注文のみ取得（未確定を含めると売上が過大になる）
         // 700:発送済み, 800:決済確定, 900:発送済み(届済み)
-        orderProgressList: [100, 200, 300, 400, 700, 800, 900],
+        orderProgressList: [700, 800, 900],
         PaginationRequestModel: {
           requestRecordsAmount: pageSize,
           requestPage: page,

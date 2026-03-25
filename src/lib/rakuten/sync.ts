@@ -203,12 +203,23 @@ async function upsertDailySales(entries: AggEntry[]): Promise<number> {
   const idMap = new Map<string, string>();
   for (const entry of entries) {
     if (entry.is_child_sku && entry.sku) {
-      // SKUで検索を優先
-      const uuid = skuMap.get(entry.sku) || productIdMap.get(entry.parent_product_id || entry.product_id);
-      if (uuid) idMap.set(entry.product_id, uuid);
+      // 1. SKUカラムで検索 → 2. product_idカラムでSKU名を検索 → 3. 親にフォールバック
+      const uuid = skuMap.get(entry.sku)
+        || productIdMap.get(entry.product_id)    // entry.product_id = SKU名（例: "40h"）
+        || productIdMap.get(entry.sku)            // SKU名でも試行
+        || productIdMap.get(entry.parent_product_id || entry.product_id);  // 親へのフォールバック
+      if (uuid) {
+        idMap.set(entry.product_id, uuid);
+      } else {
+        console.warn(`楽天SKUマッチ失敗: sku=${entry.sku}, product_id=${entry.product_id}, parent=${entry.parent_product_id}`);
+      }
     } else {
       const uuid = productIdMap.get(entry.product_id);
-      if (uuid) idMap.set(entry.product_id, uuid);
+      if (uuid) {
+        idMap.set(entry.product_id, uuid);
+      } else {
+        console.warn(`楽天商品マッチ失敗: product_id=${entry.product_id}`);
+      }
     }
   }
 

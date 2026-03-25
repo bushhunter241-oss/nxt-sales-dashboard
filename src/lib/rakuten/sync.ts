@@ -1,12 +1,12 @@
 /**
- * 楽天 RMS API → Supabase 同期オーケストレーター
+ * 楽天 RMS API → Supabase 同期オーケストレーター（v2: manageNumberベース）
  *
- * 受注データを取得 → 日別×商品でrakuten_daily_salesに集計保存
- * 商品マスタもrakuten_productsに自動登録
+ * 商品管理番号(manageNumber)をキーに日別売上を集約。
+ * 子SKU/親商品の複雑なマッピングを廃止し、Excelと同じ粒度で管理。
  */
 
 import { supabase } from "@/lib/supabase";
-import { fetchRakutenOrders, type RakutenOrder, type OrderItem } from "./orders";
+import { fetchRakutenOrders, type RakutenOrder } from "./orders";
 import type { RakutenCreds } from "./orders";
 
 interface SyncResult {
@@ -17,12 +17,20 @@ interface SyncResult {
   salesUpserted?: number;
 }
 
+/** manageNumber × date の集約エントリ */
 interface AggEntry {
-  product_id: string;
-  parent_product_id: string | null;
-  is_child_sku: boolean;
+  manage_number: string;
   product_name: string;
-  sku: string | null;
+  date: string;
+  orders: number;
+  units_sold: number;
+  sales_amount: number;
+}
+
+/** SKU × date の詳細エントリ（原価計算用） */
+interface SkuEntry {
+  manage_number: string;
+  sku_id: string | null;
   date: string;
   orders: number;
   units_sold: number;
@@ -30,234 +38,174 @@ interface AggEntry {
 }
 
 /**
- * 楽天受注データを日別×商品で集計
+ * 楽天受注データを日別×商品管理番号で集約
  */
-function aggregateOrders(orders: RakutenOrder[]): AggEntry[] {
-  const map = new Map<string, AggEntry>();
+function aggregateOrders(orders: RakutenOrder[]): {
+  byManageNumber: AggEntry[];
+  bySku: SkuEntry[];
+} {
+  const mnMap = new Map<string, AggEntry>();
+  const skuMap = new Map<string, SkuEntry>();
 
   for (const order of orders) {
     const datetime = order.orderDatetime || "";
     const date = datetime.split("T")[0];
     if (!date) continue;
 
-    // 注文全体のクーポン割引額（ポイント利用は含めない）
+    // クーポン割引額（ポイント利用は含めない）
     const couponTotal = order.couponAllTotalPrice || 0;
 
-    // 注文内の全商品を一度集めて合計金額を計算（クーポン按分用）
-    const allItems: OrderItem[] = [];
+    // 注文内の全商品を集めて合計金額を計算（クーポン按分用）
+    const allItems: Array<{
+      manageNumber: string;
+      skuId: string | null;
+      itemName: string;
+      units: number;
+      itemGross: number;
+    }> = [];
     let orderGoodsTotal = 0;
+
     for (const pkg of order.PackageModelList || []) {
       for (const item of pkg.ItemModelList || []) {
-        allItems.push(item);
+        const manageNumber = item.manageNumber || item.itemNumber || item.itemId || "unknown";
+        const skuModel = item.SkuModelList?.[0];
+        const skuId = skuModel?.merchantDefinedSkuId || skuModel?.variantId || null;
         const units = item.units || 1;
-        orderGoodsTotal += (item.priceTaxIncl || item.price || 0) * units;
+        const itemGross = (item.priceTaxIncl || item.price || 0) * units;
+
+        allItems.push({ manageNumber, skuId, itemName: item.itemName || manageNumber, units, itemGross });
+        orderGoodsTotal += itemGross;
       }
     }
 
     for (const item of allItems) {
-      const skuModel = item.SkuModelList?.[0];
-      // 子商品SKUを最優先。なければ親商品IDにフォールバック
-      const childSkuId = skuModel?.merchantDefinedSkuId || skuModel?.variantId;
-      const parentProductId = item.manageNumber || item.itemNumber || item.itemId;
-      const productId = childSkuId || parentProductId || "unknown";
-      const isChildSku = !!childSkuId;
-
-      const units = item.units || 1;
-      const itemGross = (item.priceTaxIncl || item.price || 0) * units;
-
       // クーポン割引を商品金額の比率で按分
       const couponShare = (couponTotal > 0 && orderGoodsTotal > 0)
-        ? Math.round(couponTotal * (itemGross / orderGoodsTotal))
+        ? Math.round(couponTotal * (item.itemGross / orderGoodsTotal))
         : 0;
-      const sales = itemGross - couponShare;
+      const sales = item.itemGross - couponShare;
 
-      const key = `${productId}::${date}`;
-      const existing = map.get(key);
+      // 商品管理番号 × 日付 で集約
+      const mnKey = `${item.manageNumber}::${date}`;
+      const existing = mnMap.get(mnKey);
       if (existing) {
         existing.orders += 1;
-        existing.units_sold += units;
+        existing.units_sold += item.units;
         existing.sales_amount += sales;
       } else {
-        map.set(key, {
-          product_id: productId,
-          parent_product_id: isChildSku ? (parentProductId || null) : null,
-          is_child_sku: isChildSku,
-          product_name: item.itemName || productId,
-          sku: childSkuId || null,
+        mnMap.set(mnKey, {
+          manage_number: item.manageNumber,
+          product_name: item.itemName,
           date,
           orders: 1,
-          units_sold: units,
+          units_sold: item.units,
+          sales_amount: sales,
+        });
+      }
+
+      // SKU × 日付 で集約（原価計算用）
+      const skuKey = `${item.manageNumber}::${item.skuId || ""}::${date}`;
+      const existingSku = skuMap.get(skuKey);
+      if (existingSku) {
+        existingSku.orders += 1;
+        existingSku.units_sold += item.units;
+        existingSku.sales_amount += sales;
+      } else {
+        skuMap.set(skuKey, {
+          manage_number: item.manageNumber,
+          sku_id: item.skuId,
+          date,
+          orders: 1,
+          units_sold: item.units,
           sales_amount: sales,
         });
       }
     }
   }
 
-  return Array.from(map.values());
+  return {
+    byManageNumber: Array.from(mnMap.values()),
+    bySku: Array.from(skuMap.values()),
+  };
 }
 
 /**
- * 商品マスタをupsert
+ * 商品マスタをupsert（manageNumberをproduct_idとして登録）
  */
 async function upsertProducts(entries: AggEntry[]): Promise<number> {
   const seen = new Set<string>();
-  const products: Array<{
+  const newProducts: Array<{
     product_id: string;
-    sku: string | null;
-    parent_product_id: string | null;
     name: string;
     selling_price: number;
     cost_price: number;
     fee_rate: number;
+    shipping_fee: number;
   }> = [];
 
   for (const entry of entries) {
-    // 子商品の場合はSKUで、親商品の場合はproduct_idで重複排除
-    const uniqueKey = entry.is_child_sku ? (entry.sku || entry.product_id) : entry.product_id;
-    if (seen.has(uniqueKey)) continue;
-    seen.add(uniqueKey);
+    if (seen.has(entry.manage_number)) continue;
+    seen.add(entry.manage_number);
 
-    // 平均単価を計算
     const avgPrice = entry.units_sold > 0
       ? Math.round(entry.sales_amount / entry.units_sold)
       : 0;
 
-    if (entry.is_child_sku) {
-      // 子商品: product_idは親商品管理番号、skuに子商品SKU
-      products.push({
-        product_id: entry.parent_product_id || entry.product_id,
-        sku: entry.sku,
-        parent_product_id: entry.parent_product_id,
-        name: entry.product_name,
-        selling_price: avgPrice,
-        cost_price: 0,
-        fee_rate: 10,  // 楽天手数料率 10%
-      });
-    } else {
-      // 親商品
-      products.push({
-        product_id: entry.product_id,
-        sku: null,
-        parent_product_id: null,
-        name: entry.product_name,
-        selling_price: avgPrice,
-        cost_price: 0,
-        fee_rate: 10,  // 楽天手数料率 10%
-      });
-    }
+    newProducts.push({
+      product_id: entry.manage_number,
+      name: entry.product_name,
+      selling_price: avgPrice,
+      cost_price: 0,
+      fee_rate: 10,
+      shipping_fee: 0,
+    });
   }
 
-  if (products.length === 0) return 0;
+  if (newProducts.length === 0) return 0;
 
-  // 既存商品をチェック（product_id + sku の組み合わせで判定）
+  // 既存商品をチェック
   const { data: existing } = await supabase
     .from("rakuten_products")
-    .select("product_id, sku");
+    .select("product_id");
 
-  const existingKeys = new Set(
-    (existing || []).map(p => p.sku ? `${p.product_id}::${p.sku}` : p.product_id)
-  );
+  const existingIds = new Set((existing || []).map(p => p.product_id));
+  const toInsert = newProducts.filter(p => !existingIds.has(p.product_id));
 
-  const newProducts = products.filter(p => {
-    const key = p.sku ? `${p.product_id}::${p.sku}` : p.product_id;
-    return !existingKeys.has(key);
-  });
-
-  if (newProducts.length > 0) {
+  if (toInsert.length > 0) {
     const { error } = await supabase
       .from("rakuten_products")
-      .insert(newProducts);
+      .insert(toInsert);
     if (error) {
       console.error("楽天商品マスタ登録エラー:", error);
     }
   }
 
-  return newProducts.length;
+  return toInsert.length;
 }
 
 /**
- * 日別売上データをupsert
- *
- * 二重記録防止:
- * - 子SKUデータがある日は、同じ親商品の親レコードをスキップ
- * - upsert後に既存の親重複レコードもクリーンアップ
+ * 日別売上データをupsert（manageNumber → UUID変換）
  */
 async function upsertDailySales(entries: AggEntry[]): Promise<number> {
-  // product_id → UUID のマッピング取得（SKUと親product_id両方で検索）
-  const productIds = [...new Set(entries.map(e => e.product_id))];
-  const parentIds = [...new Set(entries.filter(e => e.parent_product_id).map(e => e.parent_product_id!))];
-  const allProductIds = [...new Set([...productIds, ...parentIds])];
-
+  // manageNumber → UUID のマッピング取得
+  const manageNumbers = [...new Set(entries.map(e => e.manage_number))];
   const { data: products } = await supabase
     .from("rakuten_products")
-    .select("id, product_id, sku")
-    .in("product_id", allProductIds);
+    .select("id, product_id")
+    .in("product_id", manageNumbers);
 
-  // SKUでのマッピング（子商品用）
-  const skuMap = new Map<string, string>();
-  // product_idでのマッピング（親商品用フォールバック）
-  const productIdMap = new Map<string, string>();
-  for (const p of products || []) {
-    if (p.sku) skuMap.set(p.sku, p.id);
-    if (!p.sku) productIdMap.set(p.product_id, p.id);
-  }
-
-  // エントリーのproduct_id(SKU名) → DB UUID のマッピング
-  const idMap = new Map<string, string>();
-  for (const entry of entries) {
-    if (entry.is_child_sku && entry.sku) {
-      // 1. SKUカラムで検索 → 2. product_idカラムでSKU名を検索 → 3. 親にフォールバック
-      const uuid = skuMap.get(entry.sku)
-        || productIdMap.get(entry.product_id)
-        || productIdMap.get(entry.sku)
-        || productIdMap.get(entry.parent_product_id || entry.product_id);
-      if (uuid) {
-        idMap.set(entry.product_id, uuid);
-      } else {
-        console.warn(`楽天SKUマッチ失敗: sku=${entry.sku}, product_id=${entry.product_id}, parent=${entry.parent_product_id}`);
-      }
-    } else {
-      const uuid = productIdMap.get(entry.product_id);
-      if (uuid) {
-        idMap.set(entry.product_id, uuid);
-      } else {
-        console.warn(`楽天商品マッチ失敗: product_id=${entry.product_id}`);
-      }
-    }
-  }
-
-  // ── 二重記録防止: 子SKUがある日の親エントリをスキップ ──
-  // 親product_id → その親に子データがある日付のSet
-  const childDatesForParent = new Map<string, Set<string>>();
-  for (const entry of entries) {
-    if (entry.is_child_sku && entry.parent_product_id) {
-      if (!childDatesForParent.has(entry.parent_product_id)) {
-        childDatesForParent.set(entry.parent_product_id, new Set());
-      }
-      childDatesForParent.get(entry.parent_product_id)!.add(entry.date);
-    }
-  }
-
-  const parentEntriesToSkip = new Set<string>();
-  for (const entry of entries) {
-    if (!entry.is_child_sku) {
-      const childDates = childDatesForParent.get(entry.product_id);
-      if (childDates?.has(entry.date)) {
-        parentEntriesToSkip.add(`${entry.product_id}::${entry.date}`);
-      }
-    }
-  }
+  const idMap = new Map<string, string>(
+    (products || []).map(p => [p.product_id, p.id])
+  );
 
   let upserted = 0;
 
   for (const entry of entries) {
-    // 子SKUがある日の親エントリはスキップ（二重記録防止）
-    if (!entry.is_child_sku && parentEntriesToSkip.has(`${entry.product_id}::${entry.date}`)) {
+    const dbProductId = idMap.get(entry.manage_number);
+    if (!dbProductId) {
+      console.warn(`楽天商品マッチ失敗: ${entry.manage_number}`);
       continue;
     }
-
-    const dbProductId = idMap.get(entry.product_id);
-    if (!dbProductId) continue;
 
     // 既存レコードを確認（access_count/cvrを保持するため）
     const { data: existing } = await supabase
@@ -269,7 +217,6 @@ async function upsertDailySales(entries: AggEntry[]): Promise<number> {
 
     let error;
     if (existing) {
-      // 既存レコードあり: access_count/cvrを保持して売上データのみ更新
       ({ error } = await supabase
         .from("rakuten_daily_sales")
         .update({
@@ -281,7 +228,6 @@ async function upsertDailySales(entries: AggEntry[]): Promise<number> {
         })
         .eq("id", existing.id));
     } else {
-      // 新規レコード
       ({ error } = await supabase
         .from("rakuten_daily_sales")
         .insert({
@@ -298,67 +244,71 @@ async function upsertDailySales(entries: AggEntry[]): Promise<number> {
     }
 
     if (error) {
-      console.error(`売上upsertエラー (${entry.product_id} ${entry.date}):`, error);
+      console.error(`売上upsertエラー (${entry.manage_number} ${entry.date}):`, error);
     } else {
       upserted++;
     }
   }
 
-  // ── 既存の親重複レコードをクリーンアップ ──
-  // 子SKUがupsertされた日のうち、親レコードも存在する場合は親を削除
-  await cleanupParentDuplicates(entries, idMap, productIdMap);
-
   return upserted;
 }
 
 /**
- * 子SKUのレコードが存在する日付で、親商品のレコードが残っている場合に削除
+ * SKU別日次売上をupsert（原価計算用）
  */
-async function cleanupParentDuplicates(
-  entries: AggEntry[],
-  idMap: Map<string, string>,
-  productIdMap: Map<string, string>
-): Promise<void> {
-  // 子SKUエントリから、upsertされた日の親UUID・日付ペアを収集
-  const parentUuidDatesToCheck = new Map<string, Set<string>>();
+async function upsertDailySkuSales(entries: SkuEntry[]): Promise<number> {
+  let upserted = 0;
 
   for (const entry of entries) {
-    if (entry.is_child_sku && entry.parent_product_id) {
-      const parentUuid = productIdMap.get(entry.parent_product_id);
-      const childUuid = idMap.get(entry.product_id);
-      if (parentUuid && childUuid && parentUuid !== childUuid) {
-        if (!parentUuidDatesToCheck.has(parentUuid)) {
-          parentUuidDatesToCheck.set(parentUuid, new Set());
-        }
-        parentUuidDatesToCheck.get(parentUuid)!.add(entry.date);
-      }
-    }
-  }
+    const { error } = await supabase
+      .from("rakuten_daily_sku_sales")
+      .upsert({
+        manage_number: entry.manage_number,
+        sku_id: entry.sku_id || "",
+        date: entry.date,
+        orders: entry.orders,
+        units_sold: entry.units_sold,
+        sales_amount: entry.sales_amount,
+      }, {
+        onConflict: "manage_number,COALESCE(sku_id, ''),date",
+      });
 
-  for (const [parentUuid, dates] of parentUuidDatesToCheck) {
-    for (const date of dates) {
-      // 親レコードが存在し、子レコードも存在する場合のみ削除
-      const { data: parentRecord } = await supabase
-        .from("rakuten_daily_sales")
+    if (error) {
+      // COALESCE付きのonConflictが使えない場合は手動upsert
+      const { data: existing } = await supabase
+        .from("rakuten_daily_sku_sales")
         .select("id")
-        .eq("product_id", parentUuid)
-        .eq("date", date)
+        .eq("manage_number", entry.manage_number)
+        .eq("sku_id", entry.sku_id || "")
+        .eq("date", entry.date)
         .maybeSingle();
 
-      if (parentRecord) {
-        const { error } = await supabase
-          .from("rakuten_daily_sales")
-          .delete()
-          .eq("id", parentRecord.id);
-
-        if (error) {
-          console.error(`親重複レコード削除エラー (${parentUuid} ${date}):`, error);
-        } else {
-          console.log(`親重複レコード削除: product_id=${parentUuid}, date=${date}`);
-        }
+      if (existing) {
+        await supabase
+          .from("rakuten_daily_sku_sales")
+          .update({
+            orders: entry.orders,
+            units_sold: entry.units_sold,
+            sales_amount: entry.sales_amount,
+          })
+          .eq("id", existing.id);
+      } else {
+        await supabase
+          .from("rakuten_daily_sku_sales")
+          .insert({
+            manage_number: entry.manage_number,
+            sku_id: entry.sku_id || "",
+            date: entry.date,
+            orders: entry.orders,
+            units_sold: entry.units_sold,
+            sales_amount: entry.sales_amount,
+          });
       }
     }
+    upserted++;
   }
+
+  return upserted;
 }
 
 /**
@@ -383,23 +333,30 @@ export async function syncRakutenSales(
       };
     }
 
-    // 2. 日別×商品で集計
-    const allEntries = aggregateOrders(orders);
+    // 2. 集約
+    const { byManageNumber: allEntries, bySku: skuEntries } = aggregateOrders(orders);
 
-    // 防御: 注文日が指定範囲外のエントリを除外（API応答に範囲外データが混入するケース対策）
+    // 防御: 注文日が指定範囲外のエントリを除外
     const entries = allEntries.filter(e => {
       if (e.date < dateFrom || e.date > dateTo) {
-        console.warn(`範囲外の注文日を除外: ${e.date} (指定範囲: ${dateFrom}〜${dateTo}), product=${e.product_id}`);
+        console.warn(`範囲外の注文日を除外: ${e.date} (指定範囲: ${dateFrom}〜${dateTo}), product=${e.manage_number}`);
         return false;
       }
       return true;
     });
 
+    const filteredSkuEntries = skuEntries.filter(e =>
+      e.date >= dateFrom && e.date <= dateTo
+    );
+
     // 3. 商品マスタ登録
     const productsUpserted = await upsertProducts(entries);
 
-    // 4. 日別売上データ登録（二重記録防止 + 既存重複クリーンアップ込み）
+    // 4. 日別売上データ登録
     const salesUpserted = await upsertDailySales(entries);
+
+    // 5. SKU別売上データ登録（原価計算用）
+    await upsertDailySkuSales(filteredSkuEntries);
 
     return {
       success: true,

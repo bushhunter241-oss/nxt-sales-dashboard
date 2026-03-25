@@ -1,3 +1,10 @@
+/**
+ * 楽天売上データ取得・利益計算（v2: manageNumberベース）
+ *
+ * 利益計算式: 純利益 = 売上 − 手数料(売上×10%) − 原価 − 送料 − RPP広告費
+ * 原価・送料はSKU別コストテーブルがあればSKU別計算、なければ商品マスタのデフォルト値
+ */
+
 import { supabase } from "@/lib/supabase";
 import { RakutenDailySales } from "@/types/database";
 
@@ -26,7 +33,7 @@ export async function getAggregatedRakutenDailySales(params: {
 }) {
   let query = supabase
     .from("rakuten_daily_sales")
-    .select("date, access_count, orders, sales_amount, units_sold, rakuten_product:rakuten_products(is_archived)")
+    .select("date, access_count, orders, sales_amount, units_sold, product_id, rakuten_product:rakuten_products(is_archived)")
     .order("date", { ascending: true });
 
   if (params.startDate) query = query.gte("date", params.startDate);
@@ -81,33 +88,26 @@ export async function upsertRakutenDailySales(sales: Omit<RakutenDailySales, "id
   return data as RakutenDailySales;
 }
 
-/**
- * Safely update access_count and cvr without overwriting existing sales data.
- * If no row exists for the product+date, creates one with the access data.
- */
 export async function updateRakutenAccessData(params: {
   productId: string;
   date: string;
   accessCount: number;
   cvr: number;
 }) {
-  // Check if a row already exists
   const { data: existing } = await supabase
     .from("rakuten_daily_sales")
-    .select("id, orders, sales_amount, units_sold, cancellations, source")
+    .select("id")
     .eq("product_id", params.productId)
     .eq("date", params.date)
     .maybeSingle();
 
   if (existing) {
-    // Update only access_count and cvr, preserve everything else
     const { error } = await supabase
       .from("rakuten_daily_sales")
       .update({ access_count: params.accessCount, cvr: params.cvr })
       .eq("id", existing.id);
     if (error) throw error;
   } else {
-    // No existing row — create new with access data only
     const { error } = await supabase
       .from("rakuten_daily_sales")
       .insert({
@@ -125,40 +125,88 @@ export async function updateRakutenAccessData(params: {
   }
 }
 
-/** 子商品で原価未設定の場合、親商品の原価にフォールバック */
-function getEffectiveCostPrice(product: any, parentProductMap: Map<string, any>): number {
-  if (product?.cost_price > 0) return product.cost_price;
-  if (product?.parent_product_id) {
-    const parent = parentProductMap.get(product.parent_product_id);
-    if (parent && parent.cost_price > 0) return parent.cost_price;
-  }
-  return 0;
-}
-
-/** 子商品で送料未設定の場合、親商品の送料にフォールバック */
-function getEffectiveShippingFee(product: any, parentProductMap: Map<string, any>): number {
-  if (product?.shipping_fee > 0) return product.shipping_fee;
-  if (product?.parent_product_id) {
-    const parent = parentProductMap.get(product.parent_product_id);
-    if (parent && parent.shipping_fee > 0) return parent.shipping_fee;
-  }
-  return 0;
-}
-
 /**
  * 施策カレンダーのセールイベントmemoから割引率(%)を抽出
- * 例: "5%OFFクーポン" → 5, "10%引き" → 10, "20%ポイントバック" → 20
  */
 function parseDiscountRate(memo: string): number {
   const match = memo.match(/(\d+)%/);
   return match ? parseInt(match[1], 10) : 0;
 }
 
+/**
+ * SKU別コストを取得し、商品管理番号ごとの原価・送料を計算
+ */
+async function getSkuCostsByProduct(
+  productIds: string[],
+  startDate?: string,
+  endDate?: string,
+): Promise<Map<string, { total_cost: number; total_shipping: number }>> {
+  // product UUID → product_id(manageNumber) のマッピング
+  const { data: products } = await supabase
+    .from("rakuten_products")
+    .select("id, product_id")
+    .in("id", productIds);
+
+  const uuidToMn = new Map<string, string>(
+    (products || []).map(p => [p.id, p.product_id])
+  );
+  const manageNumbers = [...new Set((products || []).map(p => p.product_id))];
+
+  // SKU別コストを取得
+  const { data: skuCosts } = await supabase
+    .from("rakuten_sku_costs")
+    .select("manage_number, sku_id, cost_price, shipping_fee")
+    .in("manage_number", manageNumbers);
+
+  const costMap = new Map<string, Map<string, { cost_price: number; shipping_fee: number }>>();
+  for (const sc of skuCosts || []) {
+    if (!costMap.has(sc.manage_number)) costMap.set(sc.manage_number, new Map());
+    costMap.get(sc.manage_number)!.set(sc.sku_id, {
+      cost_price: sc.cost_price,
+      shipping_fee: sc.shipping_fee,
+    });
+  }
+
+  // SKU別日次売上を取得
+  let skuQuery = supabase
+    .from("rakuten_daily_sku_sales")
+    .select("manage_number, sku_id, units_sold")
+    .in("manage_number", manageNumbers);
+
+  if (startDate) skuQuery = skuQuery.gte("date", startDate);
+  if (endDate) skuQuery = skuQuery.lte("date", endDate);
+
+  const { data: skuSales } = await skuQuery;
+
+  // manageNumber別にSKUコスト合計を計算
+  const result = new Map<string, { total_cost: number; total_shipping: number }>();
+  for (const ss of skuSales || []) {
+    const skuCostMap = costMap.get(ss.manage_number);
+    const skuCost = skuCostMap?.get(ss.sku_id || "");
+    if (skuCost) {
+      const mn = ss.manage_number;
+      const existing = result.get(mn) || { total_cost: 0, total_shipping: 0 };
+      existing.total_cost += skuCost.cost_price * ss.units_sold;
+      existing.total_shipping += skuCost.shipping_fee * ss.units_sold;
+      result.set(mn, existing);
+    }
+  }
+
+  // UUID → manageNumber → result のマッピングを UUID → result に変換
+  const uuidResult = new Map<string, { total_cost: number; total_shipping: number }>();
+  for (const [uuid, mn] of uuidToMn) {
+    const costs = result.get(mn);
+    if (costs) uuidResult.set(uuid, costs);
+  }
+
+  return uuidResult;
+}
+
 export async function getRakutenProductSalesSummary(params: {
   startDate?: string;
   endDate?: string;
 }) {
-  // 日付つきで売上を取得（セール割引の日別適用に必要）
+  // 売上データ取得
   let query = supabase
     .from("rakuten_daily_sales")
     .select("product_id, date, access_count, orders, sales_amount, units_sold, rakuten_product:rakuten_products(*)");
@@ -169,19 +217,7 @@ export async function getRakutenProductSalesSummary(params: {
   const { data, error } = await query;
   if (error) { console.warn("getRakutenProductSalesSummary error:", error); return []; }
 
-  // 親商品マップを作成（原価・送料フォールバック用）
-  const { data: allProducts } = await supabase
-    .from("rakuten_products")
-    .select("*")
-    .eq("is_archived", false);
-
-  const parentProductMap = new Map<string, any>(
-    (allProducts || [])
-      .filter(p => !p.parent_product_id)
-      .map(p => [p.product_id, p])
-  );
-
-  // 施策カレンダーからセールイベントを取得（割引適用用）
+  // 施策カレンダーからセールイベントを取得
   let eventQuery = supabase
     .from("product_events")
     .select("date, product_group, memo, product_id")
@@ -192,9 +228,6 @@ export async function getRakutenProductSalesSummary(params: {
 
   const { data: saleEvents } = await eventQuery;
 
-  // 割引率のマップを構築
-  // 商品ID指定あり: date::product_id → 割引率（優先）
-  // グループ指定のみ: date::group::product_group → 割引率（フォールバック）
   const discountByProduct = new Map<string, number>();
   const discountByGroup = new Map<string, number>();
   for (const ev of saleEvents || []) {
@@ -208,7 +241,7 @@ export async function getRakutenProductSalesSummary(params: {
     }
   }
 
-  // Fetch Rakuten advertising data
+  // 広告データ取得
   let adQuery = supabase
     .from("rakuten_daily_advertising")
     .select("product_id, ad_spend, ad_sales");
@@ -227,8 +260,11 @@ export async function getRakutenProductSalesSummary(params: {
     adByProduct[row.product_id].ad_sales += row.ad_sales;
   }
 
+  // 商品別に集約
   const grouped = (data || []).reduce((acc: Record<string, any>, row: any) => {
     const pid = row.product_id;
+    if (row.rakuten_product?.is_archived) return acc;
+
     if (!acc[pid]) {
       acc[pid] = {
         product: row.rakuten_product,
@@ -242,9 +278,7 @@ export async function getRakutenProductSalesSummary(params: {
 
     const salesAmount = row.sales_amount;
 
-    // 施策カレンダーの割引は利益計算に適用しない（表示用メモのみ）
-    // 理由: API/CSVの sales_amount は既にクーポン控除後の実売値のため、
-    //        施策カレンダーの割引率を重ねて適用すると二重控除になる
+    // 施策カレンダーの割引は参考値のみ（利益計算には使わない）
     if (row.date) {
       const productSkuId = row.rakuten_product?.product_id;
       const productGroup = row.rakuten_product?.product_group;
@@ -255,7 +289,6 @@ export async function getRakutenProductSalesSummary(params: {
         discountRate = discountByGroup.get(`${row.date}::${productGroup}`);
       }
       if (discountRate && discountRate > 0) {
-        // sale_discount は参考値として記録のみ（利益計算には使わない）
         acc[pid].sale_discount += Math.round(salesAmount * (discountRate / 100));
       }
     }
@@ -267,15 +300,32 @@ export async function getRakutenProductSalesSummary(params: {
     return acc;
   }, {});
 
-  return Object.values(grouped).map((item: any) => {
-    const product = item.product;
-    const costPrice = getEffectiveCostPrice(product, parentProductMap);
-    const shippingFee = getEffectiveShippingFee(product, parentProductMap);
-    const feeRate = product?.fee_rate || 10;
-    const ad = adByProduct[product?.id] || { ad_spend: 0, ad_sales: 0 };
+  // SKU別コストを取得（利益計算用）
+  const productUuids = Object.keys(grouped);
+  const skuCostsByUuid = await getSkuCostsByProduct(
+    productUuids, params.startDate, params.endDate
+  );
 
-    const totalCost = costPrice * item.total_units;
-    const totalShipping = shippingFee * item.total_units;
+  return Object.entries(grouped).map(([pid, item]: [string, any]) => {
+    const product = item.product;
+    const feeRate = product?.fee_rate || 10;
+    const ad = adByProduct[pid] || { ad_spend: 0, ad_sales: 0 };
+
+    // SKU別コストがあればそちらを使用、なければ商品マスタのデフォルト値
+    const skuCosts = skuCostsByUuid.get(pid);
+    let totalCost: number;
+    let totalShipping: number;
+
+    if (skuCosts && (skuCosts.total_cost > 0 || skuCosts.total_shipping > 0)) {
+      totalCost = skuCosts.total_cost;
+      totalShipping = skuCosts.total_shipping;
+    } else {
+      const costPrice = product?.cost_price || 0;
+      const shippingFee = product?.shipping_fee || 0;
+      totalCost = costPrice * item.total_units;
+      totalShipping = shippingFee * item.total_units;
+    }
+
     const totalFee = Math.round(item.total_sales * (feeRate / 100));
     const totalAdSpend = ad.ad_spend;
 
@@ -301,7 +351,6 @@ export async function getRakutenProductSalesSummary(params: {
 
 /**
  * RMS売上CSVをインポートして rakuten_daily_sales を更新する。
- * RPC関数 upsert_rakuten_sales を使い、既存の access_count/cvr を保持する。
  */
 export async function importRakutenSalesCSV(
   csvData: Array<{
@@ -316,12 +365,10 @@ export async function importRakutenSalesCSV(
   let upserted = 0;
 
   for (const row of csvData) {
-    // 商品管理番号 → rakuten_products で検索（product_id or sku）
     const { data: product } = await supabase
       .from("rakuten_products")
       .select("id")
-      .or(`product_id.eq.${row.productNumber},sku.eq.${row.productNumber}`)
-      .limit(1)
+      .eq("product_id", row.productNumber)
       .maybeSingle();
 
     if (!product) {
@@ -329,7 +376,6 @@ export async function importRakutenSalesCSV(
       continue;
     }
 
-    // RPC関数で売上のみ更新（access_count/cvrは保持）
     const { error } = await supabase.rpc("upsert_rakuten_sales", {
       p_product_id: product.id,
       p_date: row.date,

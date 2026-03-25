@@ -116,8 +116,8 @@ export default function RakutenProductAnalysisPage() {
   });
 
   const { data: allDailySales = [] } = useQuery({
-    queryKey: ["rakutenAllDailySales", dateRange],
-    queryFn: () => getRakutenDailySales({ ...dateRange }),
+    queryKey: ["rakutenAllDailySales"],
+    queryFn: () => getRakutenDailySales({}), // 全期間取得（チャート表示用）
   });
 
   // Current month info for goals/BEP
@@ -277,106 +277,26 @@ export default function RakutenProductAnalysisPage() {
       });
   }, [detailGroup, groupDailyMetrics, detailEventsByDate]);
 
-  // Merge all master products into productSummary, fix parent groups & cost fallback
+  // Merge product summary with master products (manageNumber-based, no parent/child hierarchy)
   const mergedProducts = useMemo(() => {
     const allProducts = products as any[];
-    const summaryMap = new Map<string, any>();
-    for (const ps of productSummary as any[]) {
-      if (ps.product?.id) summaryMap.set(ps.product.id, ps);
-    }
-
-    // Step 1: Build parent→children map using parent_product_id
-    const childrenByParent = new Map<string, any[]>();
-    for (const p of allProducts) {
-      if (p.parent_product_id) {
-        if (!childrenByParent.has(p.parent_product_id)) childrenByParent.set(p.parent_product_id, []);
-        childrenByParent.get(p.parent_product_id)!.push(p);
-      }
-    }
-
-    // Step 2: Fix product_group — if parent has no group, inherit from children
-    const groupFixed = new Map<string, string>(); // product.id → resolved group
-    for (const p of allProducts) {
-      let grp = p.product_group || "";
-      if (!grp) {
-        // Check if this is a parent with children that have a group
-        const children = childrenByParent.get(p.product_id) || [];
-        for (const child of children) {
-          if (child.product_group) { grp = child.product_group; break; }
-        }
-      }
-      if (!grp && p.parent_product_id) {
-        // Check if parent has a group
-        const parent = allProducts.find((pp: any) => pp.product_id === p.parent_product_id);
-        if (parent?.product_group) grp = parent.product_group;
-      }
-      groupFixed.set(p.id, grp);
-    }
-
-    // Step 3: Find max cost/fee among children for parent cost fallback
-    const childMaxCost = new Map<string, { cost_price: number; fee_rate: number; shipping_fee: number }>();
-    for (const p of allProducts) {
-      if (p.parent_product_id) {
-        const parent = allProducts.find((pp: any) => pp.product_id === p.parent_product_id);
-        if (parent) {
-          const existing = childMaxCost.get(parent.id) || { cost_price: 0, fee_rate: 0, shipping_fee: 0 };
-          childMaxCost.set(parent.id, {
-            cost_price: Math.max(existing.cost_price, p.cost_price || 0),
-            fee_rate: Math.max(existing.fee_rate, p.fee_rate || 0),
-            shipping_fee: Math.max(existing.shipping_fee, p.shipping_fee || 0),
-          });
-        }
-      }
-    }
-
-    // Step 4: Build merged result
     const result: any[] = [];
     const seen = new Set<string>();
 
+    // Add products with sales data
     for (const ps of productSummary as any[]) {
       const pid = ps.product?.id;
       if (!pid) continue;
+      if (ps.product?.is_archived) continue;
       seen.add(pid);
-
-      const prod = ps.product;
-      const resolvedGroup = groupFixed.get(pid) || prod.product_group || "";
-
-      // Parent cost fallback: if parent has sales but cost=0, use max child cost
-      let costPrice = prod.cost_price || 0;
-      let feeRate = prod.fee_rate || 10;
-      let shippingFee = prod.shipping_fee || 0;
-      if (costPrice === 0 && ps.total_sales > 0 && childMaxCost.has(pid)) {
-        const fallback = childMaxCost.get(pid)!;
-        costPrice = fallback.cost_price;
-        if (fallback.fee_rate > 0) feeRate = fallback.fee_rate;
-        if (fallback.shipping_fee > 0) shippingFee = fallback.shipping_fee;
-      }
-
-      // Recalculate profit with corrected costs
-      const totalCost = costPrice * (ps.total_units || 0);
-      const totalFee = Math.round((ps.total_sales || 0) * (feeRate / 100));
-      const totalShipping = shippingFee * (ps.total_units || 0);
-      const grossProfit = (ps.total_sales || 0) - totalCost - totalFee - totalShipping;
-      const netProfit = grossProfit - (ps.total_ad_spend || 0);
-
-      result.push({
-        ...ps,
-        product: { ...prod, product_group: resolvedGroup },
-        total_cost: totalCost,
-        total_fee: totalFee,
-        gross_profit: grossProfit,
-        net_profit: netProfit,
-        profit_rate: ps.total_sales > 0 ? (netProfit / ps.total_sales) * 100 : 0,
-        unit_profit: ps.total_units > 0 ? Math.round(netProfit / ps.total_units) : 0,
-      });
+      result.push(ps);
     }
 
     // Add products with no sales
     for (const p of allProducts) {
       if (p.is_archived || seen.has(p.id)) continue;
-      const resolvedGroup = groupFixed.get(p.id) || p.product_group || "";
       result.push({
-        product: { ...p, product_group: resolvedGroup },
+        product: p,
         total_sales: 0, total_orders: 0, total_access: 0, total_units: 0,
         total_cost: 0, total_fee: 0, total_ad_spend: 0, total_ad_sales: 0,
         gross_profit: 0, net_profit: 0, profit_rate: 0, unit_profit: 0,

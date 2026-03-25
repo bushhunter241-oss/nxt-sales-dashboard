@@ -10,7 +10,7 @@ import { supabase } from "@/lib/supabase";
 // 商品マスタ: manageNumber = product_id
 const RAKUTEN_PRODUCTS = [
   {
-    id: "f1ee1a01-0000-0000-0000-000000000001", // feela01 固定UUID
+    id: "00000000-0000-0000-0000-feea00000001", // feela01 固定UUID
     name: "feela シートクッション",
     product_id: "feela01",
     product_group: "feela",
@@ -58,7 +58,7 @@ const RAKUTEN_PRODUCTS = [
     is_archived: false,
   },
   {
-    id: "imin05-0000-0000-0000-000000000005", // imin05 固定UUID
+    id: "00000000-0000-0000-0000-000000000005", // imin05 固定UUID
     name: "imin 浄化パウダー・その他",
     product_id: "imin05",
     product_group: "imin05",
@@ -70,7 +70,7 @@ const RAKUTEN_PRODUCTS = [
     is_archived: false,
   },
   {
-    id: "imin06-0000-0000-0000-000000000006", // imin06 固定UUID
+    id: "00000000-0000-0000-0000-000000000006", // imin06 固定UUID
     name: "imin ライター",
     product_id: "imin06",
     product_group: "imin06",

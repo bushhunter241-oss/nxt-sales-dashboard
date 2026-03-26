@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select } from "@/components/ui/select";
 import { formatCurrency, formatPercent, formatNumber, getDateRange } from "@/lib/utils";
-import { getRakutenProductSalesSummary, getRakutenDailySales, getRakutenProducts } from "@/lib/api/rakuten-sales";
+import { getRakutenProductSalesSummary, getRakutenDailySales, getRakutenProducts, getRakutenSkuSalesSummary } from "@/lib/api/rakuten-sales";
 import { getMonthlyGoals } from "@/lib/api/goals";
 import { getProductEvents } from "@/lib/api/events";
 import { Button } from "@/components/ui/button";
@@ -100,6 +100,7 @@ export default function RakutenProductAnalysisPage() {
   const [sortKey, setSortKey] = useState<string>("total_sales");
   const [viewMode, setViewMode] = useState<string>("grouped");
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [skuDetails, setSkuDetails] = useState<Record<string, any[]>>({});
   const [metricsTab, setMetricsTab] = useState<string>("access");
   const [detailGroup, setDetailGroup] = useState("");
   const [detailPeriod, setDetailPeriod] = useState<"current" | "compare">("current");
@@ -323,12 +324,24 @@ export default function RakutenProductAnalysisPage() {
     return groups.sort(sortFn);
   }, [mergedProducts, sortKey]);
 
-  // Toggle expand
-  const toggleGroup = (key: string) => {
+  // Toggle expand + load SKU details
+  const toggleGroup = async (key: string, manageNumber?: string) => {
     setExpandedGroups(prev => {
       const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
+      if (next.has(key)) { next.delete(key); }
+      else {
+        next.add(key);
+        // SKU詳細をロード
+        if (manageNumber && !skuDetails[manageNumber]) {
+          getRakutenSkuSalesSummary({
+            manageNumber,
+            startDate: dateRange.startDate,
+            endDate: dateRange.endDate,
+          }).then(data => {
+            setSkuDetails(prev => ({ ...prev, [manageNumber]: data }));
+          });
+        }
+      }
       return next;
     });
   };
@@ -1148,7 +1161,7 @@ export default function RakutenProductAnalysisPage() {
                       <TableRow
                         key={`group-${gi}`}
                         className="cursor-pointer hover:bg-[hsl(var(--muted))] transition-colors"
-                        onClick={() => toggleGroup(g.groupKey)}
+                        onClick={() => toggleGroup(g.groupKey, g.children[0]?.product?.product_id)}
                       >
                         <TableCell className="font-bold text-sm">
                           <span className="mr-2 inline-block w-4 text-center text-[hsl(var(--muted-foreground))]">
@@ -1174,33 +1187,47 @@ export default function RakutenProductAnalysisPage() {
                           {g.total_access > 0 && g.total_access >= g.total_orders * 0.5 ? formatPercent((g.total_orders / g.total_access) * 100) : "-"}
                         </TableCell>
                       </TableRow>
-                      {/* Expanded children rows */}
-                      {expandedGroups.has(g.groupKey) && g.children
-                        .sort((a: any, b: any) => b.total_sales - a.total_sales)
-                        .map((p: any, ci: number) => (
-                        <TableRow key={`child-${gi}-${ci}`} className="bg-[hsl(var(--muted)/0.3)]">
-                          <TableCell className="text-sm max-w-[300px] truncate pl-10" title={p.product?.name}>
-                            <span className="text-[hsl(var(--muted-foreground))]">└</span>{" "}
-                            {p.product?.name || "不明"}
-                          </TableCell>
-                          <TableCell className="text-right text-[hsl(var(--primary))]">{formatCurrency(p.total_sales)}</TableCell>
-                          <TableCell className="text-right">{formatNumber(p.total_orders)}</TableCell>
-                          <TableCell className="text-right text-red-400">{formatCurrency(p.total_cost || 0)}</TableCell>
-                          <TableCell className="text-right text-yellow-400">{formatCurrency(p.total_fee || 0)}</TableCell>
-                          <TableCell className="text-right text-purple-400">{formatCurrency(p.total_ad_spend || 0)}</TableCell>
-                          <TableCell className="text-right">{formatCurrency(p.gross_profit || 0)}</TableCell>
-                          <TableCell className={`text-right ${(p.net_profit || 0) >= 0 ? "text-green-500" : "text-red-500"}`}>
-                            {formatCurrency(p.net_profit || 0)}
-                          </TableCell>
-                          <TableCell className={`text-right ${(p.profit_rate || 0) >= 0 ? "text-green-500" : "text-red-500"}`}>
-                            {formatPercent(p.profit_rate || 0)}
-                          </TableCell>
-                          <TableCell className="text-right">{formatNumber(p.total_access || 0)}</TableCell>
-                          <TableCell className="text-right">
-                            {(p.total_access || 0) > 0 && (p.total_access || 0) >= (p.total_orders || 0) * 0.5 ? formatPercent(((p.total_orders || 0) / p.total_access) * 100) : "-"}
-                          </TableCell>
-                        </TableRow>
-                      ))}
+                      {/* Expanded SKU detail rows */}
+                      {expandedGroups.has(g.groupKey) && (() => {
+                        const mn = g.children[0]?.product?.product_id;
+                        const skus = mn ? skuDetails[mn] : null;
+                        if (!skus || skus.length === 0) {
+                          return (
+                            <TableRow key={`sku-loading-${gi}`} className="bg-[hsl(var(--muted)/0.3)]">
+                              <TableCell colSpan={11} className="text-center text-sm text-[hsl(var(--muted-foreground))] py-3">
+                                {skus ? "SKU別データなし" : "読み込み中..."}
+                              </TableCell>
+                            </TableRow>
+                          );
+                        }
+                        return skus.map((sku: any, si: number) => {
+                          const fee = Math.round(sku.sales_amount * 0.1);
+                          const profit = sku.sales_amount - sku.cost - sku.shipping - fee;
+                          const profitRate = sku.sales_amount > 0 ? (profit / sku.sales_amount) * 100 : 0;
+                          return (
+                            <TableRow key={`sku-${gi}-${si}`} className="bg-[hsl(var(--muted)/0.3)]">
+                              <TableCell className="text-sm pl-10">
+                                <span className="text-[hsl(var(--muted-foreground))]">└</span>{" "}
+                                {sku.sku_label}
+                              </TableCell>
+                              <TableCell className="text-right text-[hsl(var(--primary))]">{formatCurrency(sku.sales_amount)}</TableCell>
+                              <TableCell className="text-right">{formatNumber(sku.units_sold)}</TableCell>
+                              <TableCell className="text-right text-red-400">{formatCurrency(sku.cost)}</TableCell>
+                              <TableCell className="text-right text-yellow-400">{formatCurrency(fee)}</TableCell>
+                              <TableCell className="text-right text-purple-400">-</TableCell>
+                              <TableCell className="text-right">{formatCurrency(sku.sales_amount - sku.cost - sku.shipping - fee)}</TableCell>
+                              <TableCell className={`text-right ${profit >= 0 ? "text-green-500" : "text-red-500"}`}>
+                                {formatCurrency(profit)}
+                              </TableCell>
+                              <TableCell className={`text-right ${profitRate >= 0 ? "text-green-500" : "text-red-500"}`}>
+                                {formatPercent(profitRate)}
+                              </TableCell>
+                              <TableCell className="text-right">-</TableCell>
+                              <TableCell className="text-right">-</TableCell>
+                            </TableRow>
+                          );
+                        });
+                      })()}
                     </>
                   ))}
                 </>

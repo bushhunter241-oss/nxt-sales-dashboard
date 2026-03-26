@@ -57,6 +57,71 @@ export async function getAggregatedRakutenDailySales(params: {
   return Object.values(grouped);
 }
 
+/**
+ * SKU別売上サマリーを取得（商品詳細展開用）
+ */
+export async function getRakutenSkuSalesSummary(params: {
+  manageNumber: string;
+  startDate?: string;
+  endDate?: string;
+}) {
+  let skuQuery = supabase
+    .from("rakuten_daily_sku_sales")
+    .select("sku_id, units_sold, sales_amount")
+    .eq("manage_number", params.manageNumber);
+
+  if (params.startDate) skuQuery = skuQuery.gte("date", params.startDate);
+  if (params.endDate) skuQuery = skuQuery.lte("date", params.endDate);
+
+  const { data: skuSales } = await skuQuery;
+
+  // SKU別コスト取得
+  const { data: skuCosts } = await supabase
+    .from("rakuten_sku_costs")
+    .select("sku_id, sku_label, cost_price, shipping_fee")
+    .eq("manage_number", params.manageNumber);
+
+  const costMap = new Map(
+    (skuCosts || []).map(c => [c.sku_id, c])
+  );
+
+  // SKU別集計
+  const skuMap = new Map<string, {
+    sku_id: string;
+    sku_label: string;
+    units_sold: number;
+    sales_amount: number;
+    cost: number;
+    shipping: number;
+  }>();
+
+  for (const s of skuSales || []) {
+    const key = s.sku_id || "(不明)";
+    const existing = skuMap.get(key);
+    const costInfo = costMap.get(s.sku_id || "");
+    const unitCost = costInfo?.cost_price || 0;
+    const unitShipping = costInfo?.shipping_fee || 0;
+
+    if (existing) {
+      existing.units_sold += s.units_sold;
+      existing.sales_amount += s.sales_amount;
+      existing.cost += unitCost * s.units_sold;
+      existing.shipping += unitShipping * s.units_sold;
+    } else {
+      skuMap.set(key, {
+        sku_id: key,
+        sku_label: costInfo?.sku_label || key,
+        units_sold: s.units_sold,
+        sales_amount: s.sales_amount,
+        cost: unitCost * s.units_sold,
+        shipping: unitShipping * s.units_sold,
+      });
+    }
+  }
+
+  return Array.from(skuMap.values()).sort((a, b) => b.sales_amount - a.sales_amount);
+}
+
 export async function getRakutenDailyAdSpendByDate(params: {
   startDate?: string;
   endDate?: string;

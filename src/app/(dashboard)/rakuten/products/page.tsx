@@ -1168,7 +1168,13 @@ export default function RakutenProductAnalysisPage() {
                             {expandedGroups.has(g.groupKey) ? "▼" : "▶"}
                           </span>
                           {g.groupName}
-                          <span className="ml-2 text-xs text-[hsl(var(--muted-foreground))]">({g.children.length}件)</span>
+                          <span className="ml-2 text-xs text-[hsl(var(--muted-foreground))]">
+                            ({(() => {
+                              const mn = g.children[0]?.product?.product_id;
+                              const skus = mn ? skuDetails[mn] : null;
+                              return skus ? `${skus.length}SKU` : `${g.children.length}件`;
+                            })()})
+                          </span>
                         </TableCell>
                         <TableCell className="text-right font-bold text-[hsl(var(--primary))]">{formatCurrency(g.total_sales)}</TableCell>
                         <TableCell className="text-right font-bold">{formatNumber(g.total_orders)}</TableCell>

@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select } from "@/components/ui/select";
 import { formatCurrency, formatPercent, formatNumber, getDateRange } from "@/lib/utils";
-import { getRakutenProductSalesSummary, getRakutenDailySales, getRakutenProducts, getRakutenSkuSalesSummary } from "@/lib/api/rakuten-sales";
+import { getRakutenProductSalesSummary, getRakutenDailySales, getRakutenProducts, getRakutenSkuSalesSummary, getRakutenSkuCounts } from "@/lib/api/rakuten-sales";
 import { getMonthlyGoals } from "@/lib/api/goals";
 import { getProductEvents } from "@/lib/api/events";
 import { Button } from "@/components/ui/button";
@@ -109,6 +109,11 @@ export default function RakutenProductAnalysisPage() {
   const { data: products = [] } = useQuery({
     queryKey: ["rakutenProducts"],
     queryFn: () => getRakutenProducts(),
+  });
+
+  const { data: skuCounts = {} } = useQuery({
+    queryKey: ["rakutenSkuCounts"],
+    queryFn: () => getRakutenSkuCounts(),
   });
 
   const { data: productSummary = [] } = useQuery({
@@ -1171,8 +1176,8 @@ export default function RakutenProductAnalysisPage() {
                           <span className="ml-2 text-xs text-[hsl(var(--muted-foreground))]">
                             ({(() => {
                               const mn = g.children[0]?.product?.product_id;
-                              const skus = mn ? skuDetails[mn] : null;
-                              return skus ? `${skus.length}SKU` : `${g.children.length}件`;
+                              const count = mn ? (skuCounts as Record<string, number>)[mn] : null;
+                              return count ? `${count}SKU` : `${g.children.length}件`;
                             })()})
                           </span>
                         </TableCell>

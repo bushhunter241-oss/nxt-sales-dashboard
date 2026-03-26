@@ -58,6 +58,21 @@ export async function getAggregatedRakutenDailySales(params: {
 }
 
 /**
+ * 商品管理番号ごとのSKU数を取得
+ */
+export async function getRakutenSkuCounts(): Promise<Record<string, number>> {
+  const { data } = await supabase
+    .from("rakuten_sku_costs")
+    .select("manage_number");
+
+  const counts: Record<string, number> = {};
+  for (const row of data || []) {
+    counts[row.manage_number] = (counts[row.manage_number] || 0) + 1;
+  }
+  return counts;
+}
+
+/**
  * SKU別売上サマリーを取得（商品詳細展開用）
  */
 export async function getRakutenSkuSalesSummary(params: {

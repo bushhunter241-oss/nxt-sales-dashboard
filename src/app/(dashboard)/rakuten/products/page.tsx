@@ -96,7 +96,7 @@ function groupProducts(products: any[]): GroupedProduct[] {
 }
 
 export default function RakutenProductAnalysisPage() {
-  const [period, setPeriod] = useState("30days");
+  const [period, setPeriod] = useState("this_month");
   const [sortKey, setSortKey] = useState<string>("total_sales");
   const [viewMode, setViewMode] = useState<string>("grouped");
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());

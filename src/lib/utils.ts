@@ -28,29 +28,36 @@ export function formatDate(date: string): string {
 }
 
 export function getDateRange(period: string): { startDate: string; endDate: string } {
-  const now = new Date();
-  const endDate = now.toISOString().split('T')[0];
+  // JST基準で日付を計算（UTCとのズレ防止）
+  const now = new Date(Date.now() + 9 * 60 * 60 * 1000);
+  const formatDate = (d: Date) => {
+    const y = d.getUTCFullYear();
+    const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(d.getUTCDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
+  const endDate = formatDate(now);
   let start: Date;
 
   switch (period) {
     case '7days':
       start = new Date(now);
-      start.setDate(start.getDate() - 7);
+      start.setUTCDate(start.getUTCDate() - 7);
       break;
     case '30days':
       start = new Date(now);
-      start.setDate(start.getDate() - 30);
+      start.setUTCDate(start.getUTCDate() - 30);
       break;
     case 'last_month':
-      start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0);
-      return { startDate: start.toISOString().split('T')[0], endDate: lastMonthEnd.toISOString().split('T')[0] };
+      start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
+      const lastMonthEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 0));
+      return { startDate: formatDate(start), endDate: formatDate(lastMonthEnd) };
     case 'this_month':
-      start = new Date(now.getFullYear(), now.getMonth(), 1);
+      start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
       break;
     default:
       start = new Date('2023-01-01');
   }
 
-  return { startDate: start.toISOString().split('T')[0], endDate };
+  return { startDate: formatDate(start), endDate };
 }

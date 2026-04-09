@@ -144,10 +144,10 @@ export default function ShopifyDailyPage() {
                 <TableHead className="text-right">広告費</TableHead>
                 <TableHead className="text-right">利益</TableHead>
                 <TableHead className="text-right">利益率</TableHead>
-                <TableHead className="text-right">注文</TableHead>
                 <TableHead className="text-right">広告IMP</TableHead>
                 <TableHead className="text-right">広告流入</TableHead>
                 <TableHead className="text-right">カート追加</TableHead>
+                <TableHead className="text-right">注文</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -164,10 +164,10 @@ export default function ShopifyDailyPage() {
                   <TableCell className={`text-right ${day.profit >= 0 ? "text-green-500" : "text-red-500"}`}>
                     {formatPercent(day.profitRate)}
                   </TableCell>
-                  <TableCell className="text-right">{formatNumber(day.total_orders || 0)}</TableCell>
                   <TableCell className="text-right">{formatNumber(day.adImpressions || 0)}</TableCell>
                   <TableCell className="text-right">{formatNumber(day.adClicks || 0)}</TableCell>
                   <TableCell className="text-right">{formatNumber(day.adAddToCart || 0)}</TableCell>
+                  <TableCell className="text-right">{formatNumber(day.total_orders || 0)}</TableCell>
                 </TableRow>
               ))}
             </TableBody>

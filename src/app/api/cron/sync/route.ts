@@ -10,6 +10,8 @@ import {
 import { getCredentials } from "@/lib/amazon/auth";
 import { supabase } from "@/lib/supabase";
 import { syncRakutenSales } from "@/lib/rakuten/sync";
+import { syncShopifySales } from "@/lib/shopify/sync";
+import { syncMetaAds } from "@/lib/meta/sync";
 
 // Extend Vercel function timeout to 300s (Pro plan max)
 export const maxDuration = 300;
@@ -185,6 +187,34 @@ export async function GET(request: Request) {
       success: false,
       error: "Rakuten credentials table not found",
     });
+  }
+
+  // --- Shopify Sync ---
+  try {
+    const result = await syncShopifySales(dateStr, dateStr);
+    results.push({
+      type: "shopify-orders",
+      success: result.success,
+      records: result.salesUpserted ?? 0,
+      error: result.success ? undefined : result.message,
+    });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Unknown error";
+    results.push({ type: "shopify-orders", success: false, error: msg });
+  }
+
+  // --- Meta広告 Sync ---
+  try {
+    const result = await syncMetaAds(dateStr, dateStr);
+    results.push({
+      type: "meta-ads",
+      success: result.success,
+      records: result.count ?? 0,
+      error: result.success ? undefined : result.message,
+    });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Unknown error";
+    results.push({ type: "meta-ads", success: false, error: msg });
   }
 
   return NextResponse.json({

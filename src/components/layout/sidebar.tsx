@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 import {
   LayoutDashboard, CalendarDays, CalendarRange, Package, Megaphone,
   BoxesIcon, Calculator, Target, Upload, Settings, DollarSign, Link2,
-  ChevronDown, ChevronRight, ShoppingBag,
+  ChevronDown, ChevronRight, ShoppingBag, Filter,
 } from "lucide-react";
 
 type NavItem = { name: string; href: string; icon: any };
@@ -44,6 +44,8 @@ const navigation: NavEntry[] = [
     items: [
       { name: "日別分析", href: "/shopify/daily", icon: CalendarDays },
       { name: "月別分析", href: "/shopify/monthly", icon: CalendarRange },
+      { name: "商品別分析", href: "/shopify/products", icon: Package },
+      { name: "広告ファネル", href: "/shopify/funnel", icon: Filter },
       { name: "Meta広告管理", href: "/shopify/meta-ads", icon: Megaphone },
     ],
   },

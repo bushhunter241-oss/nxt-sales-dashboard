@@ -5,6 +5,7 @@
 import { createClient } from "@supabase/supabase-js";
 
 const API_VERSION = "2024-01";
+const ANALYTICS_API_VERSION = "2023-07"; // shopifyqlQuery は 2024-01 で廃止されたため古いバージョンを使用
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -115,11 +116,11 @@ export async function fetchOrders(dateFrom: string, dateTo: string): Promise<Sho
 /**
  * Execute a GraphQL query against Shopify Admin API
  */
-async function shopifyGraphQL<T>(query: string): Promise<T> {
+async function shopifyGraphQL<T>(query: string, apiVersion?: string): Promise<T> {
   const { token, domain } = await getAccessToken();
   if (!domain) throw new Error("SHOPIFY_STORE_DOMAIN が未設定です");
 
-  const url = `https://${domain}/admin/api/${API_VERSION}/graphql.json`;
+  const url = `https://${domain}/admin/api/${apiVersion || API_VERSION}/graphql.json`;
   const res = await fetch(url, {
     method: "POST",
     headers: {
@@ -132,7 +133,7 @@ async function shopifyGraphQL<T>(query: string): Promise<T> {
   if (res.status === 429) {
     const retryAfter = parseFloat(res.headers.get("Retry-After") || "2");
     await new Promise(r => setTimeout(r, retryAfter * 1000));
-    return shopifyGraphQL<T>(query);
+    return shopifyGraphQL<T>(query, apiVersion);
   }
 
   if (!res.ok) {
@@ -179,7 +180,7 @@ export async function fetchDailyAnalytics(dateFrom: string, dateTo: string): Pro
         rowData: string[][];
       };
     };
-  }>(query);
+  }>(query, ANALYTICS_API_VERSION);
 
   const table = data.shopifyqlQuery;
   if (table.__typename !== "TableResponse" || !table.tableData) {

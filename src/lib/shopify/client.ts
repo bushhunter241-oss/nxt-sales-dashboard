@@ -113,6 +113,95 @@ export async function fetchOrders(dateFrom: string, dateTo: string): Promise<Sho
 }
 
 /**
+ * Execute a GraphQL query against Shopify Admin API
+ */
+async function shopifyGraphQL<T>(query: string): Promise<T> {
+  const { token, domain } = await getAccessToken();
+  if (!domain) throw new Error("SHOPIFY_STORE_DOMAIN が未設定です");
+
+  const url = `https://${domain}/admin/api/${API_VERSION}/graphql.json`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "X-Shopify-Access-Token": token,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ query }),
+  });
+
+  if (res.status === 429) {
+    const retryAfter = parseFloat(res.headers.get("Retry-After") || "2");
+    await new Promise(r => setTimeout(r, retryAfter * 1000));
+    return shopifyGraphQL<T>(query);
+  }
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Shopify GraphQL error (${res.status}): ${text}`);
+  }
+
+  const json = await res.json();
+  if (json.errors) {
+    throw new Error(`Shopify GraphQL: ${JSON.stringify(json.errors)}`);
+  }
+  return json.data;
+}
+
+export interface DailyAnalytics {
+  date: string;
+  sessions: number;
+  visitors: number;
+  addToCart: number;
+}
+
+/**
+ * Fetch daily sessions/visitors/addToCart via ShopifyQL
+ */
+export async function fetchDailyAnalytics(dateFrom: string, dateTo: string): Promise<DailyAnalytics[]> {
+  const shopifyql = `FROM sessions SINCE ${dateFrom} UNTIL ${dateTo} GROUP BY day ALL`;
+  const query = `{
+    shopifyqlQuery(query: "${shopifyql}") {
+      __typename
+      ... on TableResponse {
+        tableData {
+          columns { name dataType }
+          rowData
+        }
+      }
+    }
+  }`;
+
+  const data = await shopifyGraphQL<{
+    shopifyqlQuery: {
+      __typename: string;
+      tableData?: {
+        columns: Array<{ name: string; dataType: string }>;
+        rowData: string[][];
+      };
+    };
+  }>(query);
+
+  const table = data.shopifyqlQuery;
+  if (table.__typename !== "TableResponse" || !table.tableData) {
+    console.warn("ShopifyQL returned non-table response:", table.__typename);
+    return [];
+  }
+
+  const cols = table.tableData.columns.map(c => c.name.toLowerCase());
+  const dayIdx = cols.findIndex(c => c === "day");
+  const sessionsIdx = cols.findIndex(c => c.includes("session"));
+  const visitorsIdx = cols.findIndex(c => c.includes("visitor"));
+  const cartIdx = cols.findIndex(c => c.includes("cart"));
+
+  return table.tableData.rowData.map(row => ({
+    date: row[dayIdx]?.split("T")[0] || "",
+    sessions: parseInt(row[sessionsIdx]) || 0,
+    visitors: parseInt(row[visitorsIdx]) || 0,
+    addToCart: parseInt(row[cartIdx]) || 0,
+  })).filter(r => r.date);
+}
+
+/**
  * Test connection by fetching shop info
  */
 export async function testConnection(): Promise<{ success: boolean; shopName?: string; error?: string }> {

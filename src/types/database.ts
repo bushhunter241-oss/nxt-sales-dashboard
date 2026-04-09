@@ -10,6 +10,8 @@ export interface Product {
   fba_fee_rate: number;
   /** FBA配送手数料（1個あたり固定額、円）。Amazon FBAが実際に請求する配送手数料。 */
   fba_shipping_fee: number;
+  /** Shopify配送コスト（1個あたり固定額、円）。自社配送の送料。 */
+  shopify_shipping_fee: number;
   category: string | null;
   product_group: string | null;
   parent_asin: string | null;
@@ -272,6 +274,8 @@ export interface ShopifyDailySummary {
   total_discounts: number;
   net_sales: number;
   sessions: number;
+  visitors: number;
+  add_to_cart: number;
   conversion_rate: number;
   created_at: string;
 }

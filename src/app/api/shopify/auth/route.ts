@@ -9,28 +9,31 @@ export async function GET(request: NextRequest) {
   const clientId = process.env.SHOPIFY_CLIENT_ID;
   const store = process.env.SHOPIFY_STORE_DOMAIN;
 
+  console.log("[Shopify Auth] clientId:", clientId ? `${clientId.slice(0, 8)}...` : "NOT SET");
+  console.log("[Shopify Auth] store:", store || "NOT SET");
+
   if (!clientId || !store) {
-    return NextResponse.json({ error: "SHOPIFY_CLIENT_ID / SHOPIFY_STORE_DOMAIN が未設定です" }, { status: 500 });
+    // 環境変数未設定の場合、エラーページにリダイレクト（JSONではなく）
+    const errorUrl = new URL("/settings/api-integration", request.nextUrl.origin);
+    errorUrl.searchParams.set("shopify_error", "env_not_set");
+    return NextResponse.redirect(errorUrl);
   }
 
-  // CSRF対策用のstate
   const state = crypto.randomBytes(16).toString("hex");
-
-  // コールバックURL
   const origin = request.nextUrl.origin;
   const redirectUri = `${origin}/api/shopify/auth/callback`;
-
   const scopes = "read_orders,read_products,read_analytics";
 
   const authUrl = `https://${store}/admin/oauth/authorize?client_id=${clientId}&scope=${scopes}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}`;
 
-  // stateをcookieに保存（コールバックで検証）
+  console.log("[Shopify Auth] Redirecting to:", authUrl);
+
   const response = NextResponse.redirect(authUrl);
   response.cookies.set("shopify_oauth_state", state, {
     httpOnly: true,
     secure: true,
     sameSite: "lax",
-    maxAge: 600, // 10分
+    maxAge: 600,
     path: "/",
   });
 

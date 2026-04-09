@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatCurrency, formatNumber, formatPercent, formatDate, getDateRange } from "@/lib/utils";
 import { getShopifyDailySummary, getShopifyDailySalesWithCost, getMetaAdByDate, getMetaAdSummary } from "@/lib/api/shopify-sales";
-import { DollarSign, ShoppingCart, TrendingUp, BarChart3, Wallet } from "lucide-react";
+import { DollarSign, ShoppingCart, TrendingUp, BarChart3, Wallet, Users, Eye, ShoppingBag } from "lucide-react";
 import { Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ComposedChart, ReferenceLine } from "recharts";
 import { CHART_COLORS } from "@/lib/constants";
 
@@ -78,6 +78,10 @@ export default function ShopifyDailyPage() {
   const totalProfit = dailyData.reduce((s, d) => s + d.profit, 0);
   const totalAdSpend = metaAd?.total_spend || 0;
   const avgProfitRate = totalSales > 0 ? (totalProfit / totalSales) * 100 : 0;
+  const totalSessions = dailyData.reduce((s, d) => s + (d.sessions || 0), 0);
+  const totalVisitors = dailyData.reduce((s, d) => s + (d.visitors || 0), 0);
+  const totalAddToCart = dailyData.reduce((s, d) => s + (d.add_to_cart || 0), 0);
+  const overallCvr = totalSessions > 0 ? (totalOrders / totalSessions) * 100 : 0;
 
   // チャートデータ
   const chartData = [...dailyData].reverse().map(d => ({
@@ -93,12 +97,15 @@ export default function ShopifyDailyPage() {
         <PeriodFilter value={period} onChange={setPeriod} />
       </PageHeader>
 
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-5">
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-4 lg:grid-cols-8">
         <KPICard title="売上合計" value={formatCurrency(totalSales)} icon={DollarSign} />
         <KPICard title="利益合計" value={formatCurrency(totalProfit)} icon={Wallet} />
         <KPICard title="利益率" value={formatPercent(avgProfitRate)} icon={TrendingUp} />
         <KPICard title="Meta広告費" value={formatCurrency(totalAdSpend)} icon={BarChart3} />
-        <KPICard title="注文件数" value={formatNumber(totalOrders)} icon={ShoppingCart} />
+        <KPICard title="セッション" value={formatNumber(totalSessions)} icon={Eye} />
+        <KPICard title="訪問者" value={formatNumber(totalVisitors)} icon={Users} />
+        <KPICard title="カート追加" value={formatNumber(totalAddToCart)} icon={ShoppingBag} />
+        <KPICard title="CVR" value={formatPercent(overallCvr)} icon={ShoppingCart} />
       </div>
 
       <Card className="mt-6">
@@ -138,10 +145,15 @@ export default function ShopifyDailyPage() {
                 <TableHead className="text-right">利益</TableHead>
                 <TableHead className="text-right">利益率</TableHead>
                 <TableHead className="text-right">注文</TableHead>
+                <TableHead className="text-right">セッション</TableHead>
+                <TableHead className="text-right">カート追加</TableHead>
+                <TableHead className="text-right">CVR</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {dailyData.map((day: any, i: number) => (
+              {dailyData.map((day: any, i: number) => {
+                const cvr = day.sessions > 0 ? (day.total_orders || 0) / day.sessions * 100 : 0;
+                return (
                 <TableRow key={i}>
                   <TableCell>{formatDate(day.date)}</TableCell>
                   <TableCell className="text-right text-[hsl(var(--primary))]">{formatCurrency(day.net_sales || 0)}</TableCell>
@@ -155,8 +167,12 @@ export default function ShopifyDailyPage() {
                     {formatPercent(day.profitRate)}
                   </TableCell>
                   <TableCell className="text-right">{formatNumber(day.total_orders || 0)}</TableCell>
+                  <TableCell className="text-right">{formatNumber(day.sessions || 0)}</TableCell>
+                  <TableCell className="text-right">{formatNumber(day.add_to_cart || 0)}</TableCell>
+                  <TableCell className="text-right">{formatPercent(cvr)}</TableCell>
                 </TableRow>
-              ))}
+                );
+              })}
             </TableBody>
           </Table>
         </CardContent>

@@ -48,14 +48,23 @@ export default function ShopifyDailyPage() {
     return map;
   }, [salesWithCost]);
 
-  // 日別データにコスト・広告費・利益を付与
+  // 日別データにコスト・広告費・利益を付与（広告費のみの日も含める）
   const dailyData = useMemo(() => {
-    return (dailySummary as any[]).map((d: any) => {
+    const metaMap = (metaAdByDate || {}) as Record<string, number>;
+    // 売上データの日付 + 広告データの日付をマージ
+    const allDates = new Set<string>();
+    for (const d of (dailySummary as any[])) allDates.add(d.date);
+    for (const date of Object.keys(metaMap)) allDates.add(date);
+
+    const summaryMap = new Map((dailySummary as any[]).map((d: any) => [d.date, d]));
+
+    return Array.from(allDates).map((date) => {
+      const d = summaryMap.get(date) || { date, net_sales: 0, total_orders: 0, total_units: 0 };
       const sales = d.net_sales || 0;
-      const cost = costByDate[d.date]?.cost || 0;
-      const commission = costByDate[d.date]?.commission || 0;
-      const shipping = costByDate[d.date]?.shipping || 0;
-      const adSpend = (metaAdByDate as Record<string, number>)[d.date] || 0;
+      const cost = costByDate[date]?.cost || 0;
+      const commission = costByDate[date]?.commission || 0;
+      const shipping = costByDate[date]?.shipping || 0;
+      const adSpend = metaMap[date] || 0;
       const fees = commission + shipping;
       const profit = sales - cost - fees - adSpend;
       const profitRate = sales > 0 ? (profit / sales) * 100 : 0;

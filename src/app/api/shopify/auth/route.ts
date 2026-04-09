@@ -22,7 +22,7 @@ export async function GET(request: NextRequest) {
   const state = crypto.randomBytes(16).toString("hex");
   const origin = request.nextUrl.origin;
   const redirectUri = `${origin}/api/shopify/auth/callback`;
-  const scopes = "read_orders,read_products,read_analytics";
+  const scopes = "read_orders,read_products,read_analytics,read_reports";
 
   const authUrl = `https://${store}/admin/oauth/authorize?client_id=${clientId}&scope=${scopes}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}`;
 

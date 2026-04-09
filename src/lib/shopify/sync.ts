@@ -2,7 +2,7 @@
  * Shopify → Supabase 同期ロジック
  */
 import { createClient } from "@supabase/supabase-js";
-import { fetchOrders, fetchDailyAnalytics, type ShopifyOrder } from "./client";
+import { fetchOrders, type ShopifyOrder } from "./client";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -90,25 +90,14 @@ export async function syncShopifySales(dateFrom: string, dateTo: string): Promis
     else console.error("Shopify sales upsert error:", error.message);
   }
 
-  // アナリティクスデータ取得（sessions, visitors, add_to_cart）
-  let analyticsMap: Record<string, { sessions: number; visitors: number; addToCart: number }> = {};
-  try {
-    const analytics = await fetchDailyAnalytics(dateFrom, dateTo);
-    for (const a of analytics) {
-      analyticsMap[a.date] = { sessions: a.sessions, visitors: a.visitors, addToCart: a.addToCart };
-    }
-  } catch (e) {
-    console.warn("Shopify analytics fetch failed (read_analytics scope may be missing):", e instanceof Error ? e.message : e);
-  }
+  // NOTE: Shopify Analytics（sessions等）はShopifyQL APIがBasicプランで利用不可のため無効化
+  // カート追加・広告流入はMeta Marketing APIから取得している
 
-  // Upsert daily summary（注文データ + アナリティクス）
-  // アナリティクスのみの日も含める
-  const allDates = new Set([...Object.keys(dailySummary), ...Object.keys(analyticsMap)]);
+  // Upsert daily summary（注文データ）
+  const allDates = new Set(Object.keys(dailySummary));
   let summaryUpserted = 0;
   for (const date of allDates) {
     const agg = dailySummary[date] || { orders: 0, units: 0, gross: 0, discounts: 0, net: 0 };
-    const ana = analyticsMap[date] || { sessions: 0, visitors: 0, addToCart: 0 };
-    const cvr = ana.sessions > 0 ? (agg.orders / ana.sessions) * 100 : 0;
     const { error } = await s.from("shopify_daily_summary").upsert({
       date,
       total_orders: agg.orders,
@@ -116,10 +105,6 @@ export async function syncShopifySales(dateFrom: string, dateTo: string): Promis
       gross_sales: Math.round(agg.gross),
       total_discounts: Math.round(agg.discounts),
       net_sales: Math.round(agg.net),
-      sessions: ana.sessions,
-      visitors: ana.visitors,
-      add_to_cart: ana.addToCart,
-      conversion_rate: Math.round(cvr * 100) / 100,
     }, { onConflict: "date" });
     if (!error) summaryUpserted++;
   }

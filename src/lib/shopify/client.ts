@@ -5,7 +5,7 @@
 import { createClient } from "@supabase/supabase-js";
 
 const API_VERSION = "2024-01";
-const ANALYTICS_API_VERSION = "2023-07"; // shopifyqlQuery は 2024-01 で廃止されたため古いバージョンを使用
+const ANALYTICS_API_VERSION = "2024-04"; // shopifyqlQuery は 2024-04 で追加された
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;

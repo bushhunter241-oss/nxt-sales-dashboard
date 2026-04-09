@@ -33,15 +33,21 @@ export async function getMetaAdSummary(params: { startDate?: string; endDate?: s
   }), { total_spend: 0, total_purchases: 0, total_purchase_value: 0, total_impressions: 0, total_clicks: 0 });
 }
 
-/** Meta広告費を日別に集計して返す */
-export async function getMetaAdByDate(params: { startDate?: string; endDate?: string }): Promise<Record<string, number>> {
-  let query = supabase.from("meta_ad_daily").select("date, spend");
+/** Meta広告データを日別に集計して返す（広告費・カート追加・クリック・IMP） */
+export async function getMetaAdByDate(params: { startDate?: string; endDate?: string }): Promise<Record<string, { spend: number; add_to_cart: number; clicks: number; impressions: number }>> {
+  let query = supabase.from("meta_ad_daily").select("date, spend, add_to_cart, clicks, impressions");
   if (params.startDate) query = query.gte("date", params.startDate);
   if (params.endDate) query = query.lte("date", params.endDate);
   const { data, error } = await query;
   if (error) { console.warn("getMetaAdByDate error:", error); return {}; }
-  const byDate: Record<string, number> = {};
-  for (const r of data || []) { byDate[r.date] = (byDate[r.date] || 0) + (r.spend || 0); }
+  const byDate: Record<string, { spend: number; add_to_cart: number; clicks: number; impressions: number }> = {};
+  for (const r of data || []) {
+    if (!byDate[r.date]) byDate[r.date] = { spend: 0, add_to_cart: 0, clicks: 0, impressions: 0 };
+    byDate[r.date].spend += r.spend || 0;
+    byDate[r.date].add_to_cart += r.add_to_cart || 0;
+    byDate[r.date].clicks += r.clicks || 0;
+    byDate[r.date].impressions += r.impressions || 0;
+  }
   return byDate;
 }
 

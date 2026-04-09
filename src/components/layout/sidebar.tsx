@@ -40,7 +40,7 @@ const navigation: NavEntry[] = [
   {
     section: "🟢 Shopify",
     collapsible: true,
-    defaultOpen: false,
+    defaultOpen: true,
     items: [
       { name: "日別分析", href: "/shopify/daily", icon: CalendarDays },
       { name: "月別分析", href: "/shopify/monthly", icon: CalendarRange },

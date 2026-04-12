@@ -58,6 +58,7 @@ interface GroupedProduct {
   total_units: number;
   total_cost: number;
   total_fba_fee: number;
+  total_point_cost: number;
   total_ad_spend: number;
   total_sessions: number;
   gross_profit: number;
@@ -79,7 +80,7 @@ function groupProducts(
         groupName: key,
         children: [],
         total_sales: 0, total_orders: 0, total_units: 0,
-        total_cost: 0, total_fba_fee: 0, total_ad_spend: 0, total_sessions: 0,
+        total_cost: 0, total_fba_fee: 0, total_point_cost: 0, total_ad_spend: 0, total_sessions: 0,
         gross_profit: 0, net_profit: 0, profit_rate: 0, unit_profit: 0,
       };
     }
@@ -90,6 +91,7 @@ function groupProducts(
     g.total_units += p.total_units || 0;
     g.total_cost += p.total_cost || 0;
     g.total_fba_fee += p.total_fba_fee || 0;
+    g.total_point_cost += p.total_point_cost || 0;
     g.total_ad_spend += p.total_ad_spend || 0; // ASIN別合計（参考値）
     g.total_sessions += p.total_sessions || 0;
     g.gross_profit += p.gross_profit || 0;
@@ -395,6 +397,7 @@ export default function ProductAnalysisPage() {
   const totalSales = groupedProducts.reduce((s, g) => s + g.total_sales, 0);
   const totalCost = groupedProducts.reduce((s, g) => s + g.total_cost, 0);
   const totalFbaFee = groupedProducts.reduce((s, g) => s + g.total_fba_fee, 0);
+  const totalPointCost = groupedProducts.reduce((s, g) => s + g.total_point_cost, 0);
   const totalAdSpend = groupedProducts.reduce((s, g) => s + g.total_ad_spend, 0);
   const totalProfit = groupedProducts.reduce((s, g) => s + g.net_profit, 0);
   const overallProfitRate = totalSales > 0 ? (totalProfit / totalSales) * 100 : 0;
@@ -1232,6 +1235,7 @@ export default function ProductAnalysisPage() {
                 <TableHead className="text-right">注文数</TableHead>
                 <TableHead className="text-right">原価</TableHead>
                 <TableHead className="text-right">FBA手数料</TableHead>
+                <TableHead className="text-right">ポイント</TableHead>
                 <TableHead className="text-right">広告費</TableHead>
                 <TableHead className="text-right">粗利</TableHead>
                 <TableHead className="text-right">純利益</TableHead>
@@ -1263,6 +1267,7 @@ export default function ProductAnalysisPage() {
                         <TableCell className="text-right font-bold">{formatNumber(g.total_orders)}</TableCell>
                         <TableCell className="text-right font-bold text-red-400">{formatCurrency(g.total_cost)}</TableCell>
                         <TableCell className="text-right font-bold text-yellow-400">{formatCurrency(g.total_fba_fee)}</TableCell>
+                        <TableCell className="text-right font-bold text-orange-400">{g.total_point_cost > 0 ? formatCurrency(g.total_point_cost) : "—"}</TableCell>
                         <TableCell className="text-right font-bold text-purple-400">{formatCurrency(g.total_ad_spend)}</TableCell>
                         <TableCell className="text-right font-bold">{formatCurrency(g.gross_profit)}</TableCell>
                         <TableCell className={`text-right font-bold ${g.net_profit >= 0 ? "text-green-500" : "text-red-500"}`}>
@@ -1293,6 +1298,7 @@ export default function ProductAnalysisPage() {
                           <TableCell className="text-right">{formatNumber(p.total_orders)}</TableCell>
                           <TableCell className="text-right text-red-400">{formatCurrency(p.total_cost || 0)}</TableCell>
                           <TableCell className="text-right text-yellow-400">{formatCurrency(p.total_fba_fee || 0)}</TableCell>
+                          <TableCell className="text-right text-orange-400">{(p.total_point_cost || 0) > 0 ? formatCurrency(p.total_point_cost) : "—"}</TableCell>
                           <TableCell className="text-right text-[hsl(var(--muted-foreground))]">—</TableCell>
                           <TableCell className="text-right">{formatCurrency(p.gross_profit || 0)}</TableCell>
                           <TableCell className="text-right text-[hsl(var(--muted-foreground))]">—</TableCell>
@@ -1321,6 +1327,7 @@ export default function ProductAnalysisPage() {
                       <TableCell className="text-right">{formatNumber(p.total_orders)}</TableCell>
                       <TableCell className="text-right text-red-400">{formatCurrency(p.total_cost || 0)}</TableCell>
                       <TableCell className="text-right text-yellow-400">{formatCurrency(p.total_fba_fee || 0)}</TableCell>
+                      <TableCell className="text-right text-orange-400">{(p.total_point_cost || 0) > 0 ? formatCurrency(p.total_point_cost) : "—"}</TableCell>
                       <TableCell className="text-right text-purple-400">{formatCurrency(p.total_ad_spend || 0)}</TableCell>
                       <TableCell className="text-right">{formatCurrency(p.gross_profit || 0)}</TableCell>
                       <TableCell className={`text-right font-bold ${(p.net_profit || 0) >= 0 ? "text-green-500" : "text-red-500"}`}>
@@ -1346,8 +1353,9 @@ export default function ProductAnalysisPage() {
                   <TableCell className="text-right">{formatNumber(sortedProducts.reduce((s: number, p: any) => s + p.total_orders, 0))}</TableCell>
                   <TableCell className="text-right text-red-400">{formatCurrency(totalCost)}</TableCell>
                   <TableCell className="text-right text-yellow-400">{formatCurrency(totalFbaFee)}</TableCell>
+                  <TableCell className="text-right text-orange-400">{totalPointCost > 0 ? formatCurrency(totalPointCost) : "—"}</TableCell>
                   <TableCell className="text-right text-purple-400">{formatCurrency(totalAdSpend)}</TableCell>
-                  <TableCell className="text-right">{formatCurrency(totalSales - totalCost - totalFbaFee)}</TableCell>
+                  <TableCell className="text-right">{formatCurrency(totalSales - totalCost - totalFbaFee - totalPointCost)}</TableCell>
                   <TableCell className={`text-right ${totalProfit >= 0 ? "text-green-500" : "text-red-500"}`}>{formatCurrency(totalProfit)}</TableCell>
                   <TableCell className={`text-right ${overallProfitRate >= 0 ? "text-green-500" : "text-red-500"}`}>{formatPercent(overallProfitRate)}</TableCell>
                   <TableCell className="text-right">

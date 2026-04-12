@@ -6,18 +6,32 @@ export async function getDailySales(params: {
   endDate?: string;
   productId?: string;
 }) {
-  let query = supabase
-    .from("daily_sales")
-    .select("*, product:products(*)")
-    .order("date", { ascending: false });
+  // Supabaseの1000件制限に対応するためページネーション
+  const allData: any[] = [];
+  const PAGE_SIZE = 1000;
+  let offset = 0;
+  let hasMore = true;
 
-  if (params.startDate) query = query.gte("date", params.startDate);
-  if (params.endDate) query = query.lte("date", params.endDate);
-  if (params.productId) query = query.eq("product_id", params.productId);
+  while (hasMore) {
+    let query = supabase
+      .from("daily_sales")
+      .select("*, product:products(*)")
+      .order("date", { ascending: false })
+      .range(offset, offset + PAGE_SIZE - 1);
 
-  const { data, error } = await query;
-  if (error) { console.warn("getDailySales error:", error); return []; }
-  return (data || []).filter((r: any) => !r.product?.is_archived && !r.product?.is_parent);
+    if (params.startDate) query = query.gte("date", params.startDate);
+    if (params.endDate) query = query.lte("date", params.endDate);
+    if (params.productId) query = query.eq("product_id", params.productId);
+
+    const { data, error } = await query;
+    if (error) { console.warn("getDailySales error:", error); break; }
+
+    allData.push(...(data || []));
+    hasMore = (data?.length || 0) === PAGE_SIZE;
+    offset += PAGE_SIZE;
+  }
+
+  return allData.filter((r: any) => !r.product?.is_archived && !r.product?.is_parent);
 }
 
 export async function getAggregatedDailySales(params: {
@@ -65,16 +79,24 @@ export async function getProductSalesSummary(params: {
   startDate?: string;
   endDate?: string;
 }) {
-  // 1. Fetch sales data with product info
-  let query = supabase
-    .from("daily_sales")
-    .select("product_id, sessions, orders, sales_amount, units_sold, product:products(*)");
-
-  if (params.startDate) query = query.gte("date", params.startDate);
-  if (params.endDate) query = query.lte("date", params.endDate);
-
-  const { data, error } = await query;
-  if (error) { console.warn("getProductSalesSummary error:", error); return []; }
+  // 1. Fetch sales data with product info (ページネーション対応) — date も取得（ポイント施策突き合わせ用）
+  const allSalesData: any[] = [];
+  let offset = 0;
+  let hasMore = true;
+  while (hasMore) {
+    let query = supabase
+      .from("daily_sales")
+      .select("product_id, date, sessions, orders, sales_amount, units_sold, product:products(*)")
+      .range(offset, offset + 999);
+    if (params.startDate) query = query.gte("date", params.startDate);
+    if (params.endDate) query = query.lte("date", params.endDate);
+    const { data: page, error } = await query;
+    if (error) { console.warn("getProductSalesSummary error:", error); break; }
+    allSalesData.push(...(page || []));
+    hasMore = (page?.length || 0) === 1000;
+    offset += 1000;
+  }
+  const data = allSalesData;
 
   // 2. Fetch advertising data for the same period
   let adQuery = supabase
@@ -113,7 +135,28 @@ export async function getProductSalesSummary(params: {
     expByProduct[row.product_id] = (expByProduct[row.product_id] || 0) + row.amount;
   }
 
+  // 2c. Fetch point events (施策カレンダーのポイント施策) for the same period
+  let pointEventQuery = supabase
+    .from("product_events")
+    .select("date, product_group, discount_rate")
+    .eq("event_type", "point");
+
+  if (params.startDate) pointEventQuery = pointEventQuery.gte("date", params.startDate);
+  if (params.endDate) pointEventQuery = pointEventQuery.lte("date", params.endDate);
+
+  const { data: pointEvents } = await pointEventQuery;
+
+  // Build lookup: "date|product_group" → discount_rate (%)
+  const pointEventMap: Record<string, number> = {};
+  for (const ev of pointEvents || []) {
+    if (!ev.discount_rate || !ev.product_group) continue;
+    const key = `${ev.date}|${ev.product_group}`;
+    // 同日・同グループに複数イベントがある場合は最大値を適用
+    pointEventMap[key] = Math.max(pointEventMap[key] || 0, ev.discount_rate);
+  }
+
   // 3. Group sales by product and calculate profit
+  // ポイント施策がある日の売上を別途集計
   const grouped = (data || []).reduce((acc: Record<string, any>, row: any) => {
     const pid = row.product_id;
     if (!acc[pid]) {
@@ -123,12 +166,24 @@ export async function getProductSalesSummary(params: {
         total_orders: 0,
         total_sessions: 0,
         total_units: 0,
+        event_point_cost: 0,
       };
     }
     acc[pid].total_sales += row.sales_amount;
     acc[pid].total_orders += row.orders;
     acc[pid].total_sessions += row.sessions;
     acc[pid].total_units += row.units_sold;
+
+    // 施策カレンダーのポイント施策をチェック
+    const productGroup = row.product?.product_group;
+    if (productGroup && row.date) {
+      const eventKey = `${row.date}|${productGroup}`;
+      const eventPointRate = pointEventMap[eventKey];
+      if (eventPointRate) {
+        acc[pid].event_point_cost += Math.round(row.sales_amount * (eventPointRate / 100));
+      }
+    }
+
     return acc;
   }, {});
 
@@ -140,7 +195,7 @@ export async function getProductSalesSummary(params: {
     const fbaFeeRate = product?.fba_fee_rate || 15;
     // fba_shipping_fee = FBA配送手数料（1個あたり固定額、円）例: 532
     const fbaShippingFee = product?.fba_shipping_fee || 0;
-    // point_rate = ポイント付与率（%）例: 1 → 売上の1%がポイント原資
+    // point_rate = 商品マスタの常設ポイント付与率（%）例: 1 → 売上の1%がポイント原資
     const pointRate = product?.point_rate || 0;
     const ad = adByProduct[product?.id] || { ad_spend: 0, ad_sales: 0 };
 
@@ -152,8 +207,10 @@ export async function getProductSalesSummary(params: {
     const totalShippingFee = fbaShippingFee * item.total_units;
     // FBA手数料合計 = 紹介料 + 配送手数料
     const totalFbaFee = totalReferralFee + totalShippingFee;
-    // ポイント原資 = 売上 × ポイント付与率
-    const totalPointCost = Math.round(item.total_sales * (pointRate / 100));
+    // ポイント原資 = 商品マスタの常設ポイント + 施策カレンダーのイベントポイント
+    const basePointCost = Math.round(item.total_sales * (pointRate / 100));
+    const eventPointCost = item.event_point_cost || 0;
+    const totalPointCost = basePointCost + eventPointCost;
     const totalAdSpend = ad.ad_spend;
     // 経費（VINE費用・その他）
     const totalExpenses = expByProduct[product?.id] || 0;
@@ -184,12 +241,19 @@ export async function getProductSalesSummary(params: {
     };
   });
 
-  // 子ASINが参照する親ASINを自動判定して除外
+  return filterOutParentAsins(result);
+}
+
+/**
+ * 子ASINが参照する親ASINを自動判定して除外するフィルタ。
+ * archived / is_parent / 子ASINに参照されるASIN をすべて除外。
+ */
+export function filterOutParentAsins<T extends { product?: any }>(items: T[]): T[] {
   const childParentAsins = new Set<string>();
-  for (const item of result) {
-    if ((item as any).product?.parent_asin) childParentAsins.add((item as any).product.parent_asin);
+  for (const item of items) {
+    if (item.product?.parent_asin) childParentAsins.add(item.product.parent_asin);
   }
-  return result.filter((item: any) => {
+  return items.filter((item) => {
     if (item.product?.is_archived) return false;
     if (item.product?.is_parent) return false;
     if (item.product?.asin && childParentAsins.has(item.product.asin)) return false;

@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select } from "@/components/ui/select";
 import { formatCurrency, formatPercent, formatNumber, getDateRange } from "@/lib/utils";
-import { getProductSalesSummary, getDailySales } from "@/lib/api/sales";
+import { getProductSalesSummary, getDailySales, filterOutParentAsins } from "@/lib/api/sales";
 import { getCampaignAdSpendByGroup } from "@/lib/api/advertising";
 import { getProducts } from "@/lib/api/products";
 import { getBsrRankings } from "@/lib/api/bsr";
@@ -123,7 +123,7 @@ function groupProducts(
 }
 
 export default function ProductAnalysisPage() {
-  const [period, setPeriod] = useState("30days");
+  const [period, setPeriod] = useState("this_month");
   const [sortKey, setSortKey] = useState<string>("total_sales");
   const [viewMode, setViewMode] = useState<string>("grouped");
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
@@ -368,33 +368,12 @@ export default function ProductAnalysisPage() {
     return b.total_sales - a.total_sales;
   };
 
-  // Individual sorted products
-  // 子ASINのparent_asinを収集（親ASIN自動判定用）
-  const _childParentAsins = useMemo(() => {
-    const set = new Set<string>();
-    for (const p of productSummary as any[]) { if (p.product?.parent_asin) set.add(p.product.parent_asin); }
-    return set;
-  }, [productSummary]);
+  // Individual sorted products (共有フィルタで親ASIN・archived除外)
+  const sortedProducts = [...filterOutParentAsins(productSummary as any[])].sort(sortFn);
 
-  const sortedProducts = [...(productSummary as any[])].filter((p: any) =>
-    !p.product?.is_archived && !p.product?.is_parent && !(p.product?.asin && _childParentAsins.has(p.product.asin))
-  ).sort(sortFn);
-
-  // Grouped products (exclude archived and parent ASINs — auto-detect parents)
+  // Grouped products
   const groupedProducts = useMemo(() => {
-    const all = productSummary as any[];
-    // 子ASINのparent_asinを収集 → 親ASINを自動判定
-    const childParentAsins = new Set<string>();
-    for (const p of all) {
-      if (p.product?.parent_asin) childParentAsins.add(p.product.parent_asin);
-    }
-    const filtered = all.filter((p: any) => {
-      if (p.product?.is_archived) return false;
-      if (p.product?.is_parent) return false;
-      // is_parent未設定でも、子ASINが参照している親ASINなら除外
-      if (p.product?.asin && childParentAsins.has(p.product.asin)) return false;
-      return true;
-    });
+    const filtered = filterOutParentAsins(productSummary as any[]);
     const groups = groupProducts(filtered, campaignAdByGroup as Record<string, { ad_spend: number; ad_sales: number; ad_orders: number }>);
     return groups.sort(sortFn);
   }, [productSummary, sortKey, campaignAdByGroup]);
@@ -412,16 +391,12 @@ export default function ProductAnalysisPage() {
   // Data source for charts (use grouped or individual based on view)
   const chartSource = viewMode === "grouped" ? groupedProducts : sortedProducts;
 
-  // Summary KPIs
-  const totalSales = sortedProducts.reduce((s, p: any) => s + p.total_sales, 0);
-  const totalProfit = sortedProducts.reduce((s, p: any) => s + (p.net_profit || 0), 0);
-  const totalCost = sortedProducts.reduce((s, p: any) => s + (p.total_cost || 0), 0);
-  const totalFbaFee = sortedProducts.reduce((s, p: any) => s + (p.total_fba_fee || 0), 0);
-  // キャンペーン単位の広告費合計（二重計上回避）、フォールバック時はASIN合計
-  const campaignAdGroupValues = Object.values(campaignAdByGroup as Record<string, { ad_spend: number }>);
-  const totalAdSpend = campaignAdGroupValues.length > 0
-    ? campaignAdGroupValues.reduce((s, g) => s + g.ad_spend, 0)
-    : sortedProducts.reduce((s, p: any) => s + (p.total_ad_spend || 0), 0);
+  // Summary KPIs — グループ集計値を使用（キャンペーン広告費が正しく反映される）
+  const totalSales = groupedProducts.reduce((s, g) => s + g.total_sales, 0);
+  const totalCost = groupedProducts.reduce((s, g) => s + g.total_cost, 0);
+  const totalFbaFee = groupedProducts.reduce((s, g) => s + g.total_fba_fee, 0);
+  const totalAdSpend = groupedProducts.reduce((s, g) => s + g.total_ad_spend, 0);
+  const totalProfit = groupedProducts.reduce((s, g) => s + g.net_profit, 0);
   const overallProfitRate = totalSales > 0 ? (totalProfit / totalSales) * 100 : 0;
 
   // Profit bar chart data (top 10)
@@ -805,7 +780,7 @@ export default function ProductAnalysisPage() {
                 <XAxis type="number" stroke="hsl(0 0% 50%)" fontSize={11} tickFormatter={(v) => `¥${(v / 10000).toFixed(0)}万`} />
                 <YAxis type="category" dataKey="name" stroke="hsl(0 0% 50%)" fontSize={10} width={120} />
                 <Tooltip
-                  contentStyle={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px" }}
+                  contentStyle={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px", color: "#fff" }}
                   formatter={(value: any) => formatCurrency(value)}
                 />
                 <Legend />
@@ -830,7 +805,7 @@ export default function ProductAnalysisPage() {
                 <XAxis type="number" stroke="hsl(0 0% 50%)" fontSize={11} tickFormatter={(v) => `${v}%`} />
                 <YAxis type="category" dataKey="name" stroke="hsl(0 0% 50%)" fontSize={10} width={120} />
                 <Tooltip
-                  contentStyle={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px" }}
+                  contentStyle={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px", color: "#fff" }}
                   formatter={(value: any, name: string) => name === "利益率" ? `${value}%` : formatCurrency(value)}
                 />
                 <ReferenceLine x={0} stroke="hsl(0 0% 40%)" />
@@ -859,7 +834,7 @@ export default function ProductAnalysisPage() {
                     <Cell key={i} fill={entry.color} />
                   ))}
                 </Pie>
-                <Tooltip contentStyle={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px" }} formatter={(value: any) => formatCurrency(value)} />
+                <Tooltip contentStyle={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px", color: "#fff" }} formatter={(value: any) => formatCurrency(value)} />
                 <Legend />
               </PieChart>
             </ResponsiveContainer>
@@ -1008,7 +983,7 @@ export default function ProductAnalysisPage() {
                     label={{ value: "順位", angle: -90, position: "insideLeft", style: { fill: "hsl(0 0% 50%)" } }}
                   />
                   <Tooltip
-                    contentStyle={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px" }}
+                    contentStyle={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px", color: "#fff" }}
                     formatter={(value: any) => `#${value}`}
                   />
                   <Legend />
@@ -1045,7 +1020,7 @@ export default function ProductAnalysisPage() {
                   }
                 />
                 <Tooltip
-                  contentStyle={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px" }}
+                  contentStyle={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px", color: "#fff" }}
                   formatter={(value: any) =>
                     metricsTab === "sales" || metricsTab === "profit"
                       ? formatCurrency(value)
@@ -1102,7 +1077,7 @@ export default function ProductAnalysisPage() {
                     <YAxis yAxisId="left" stroke="hsl(0 0% 50%)" fontSize={10} />
                     <YAxis yAxisId="right" orientation="right" stroke="hsl(0 0% 40%)" fontSize={10} tickFormatter={(v) => `${v}%`} />
                     <Tooltip
-                      contentStyle={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px" }}
+                      contentStyle={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px", color: "#fff" }}
                       formatter={(value: any, name: string) => name.includes("CVR") ? `${value}%` : formatNumber(value)}
                       content={({ active, payload, label }) => {
                         if (!active || !payload?.length) return null;
@@ -1152,7 +1127,7 @@ export default function ProductAnalysisPage() {
                     <XAxis dataKey="date" stroke="hsl(0 0% 50%)" fontSize={10} />
                     <YAxis stroke="hsl(0 0% 50%)" fontSize={10} tickFormatter={(v) => `¥${(v / 10000).toFixed(0)}万`} />
                     <Tooltip
-                      contentStyle={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px" }}
+                      contentStyle={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px", color: "#fff" }}
                       content={({ active, payload, label }) => {
                         if (!active || !payload?.length) return null;
                         const entry = payload[0]?.payload;
@@ -1200,7 +1175,7 @@ export default function ProductAnalysisPage() {
                     <XAxis dataKey="date" stroke="hsl(0 0% 50%)" fontSize={10} />
                     <YAxis stroke="hsl(0 0% 50%)" fontSize={10} />
                     <Tooltip
-                      contentStyle={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px" }}
+                      contentStyle={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px", color: "#fff" }}
                       content={({ active, payload, label }) => {
                         if (!active || !payload?.length) return null;
                         const entry = payload[0]?.payload;
@@ -1318,19 +1293,15 @@ export default function ProductAnalysisPage() {
                           <TableCell className="text-right">{formatNumber(p.total_orders)}</TableCell>
                           <TableCell className="text-right text-red-400">{formatCurrency(p.total_cost || 0)}</TableCell>
                           <TableCell className="text-right text-yellow-400">{formatCurrency(p.total_fba_fee || 0)}</TableCell>
-                          <TableCell className="text-right text-purple-400">{formatCurrency(p.total_ad_spend || 0)}</TableCell>
+                          <TableCell className="text-right text-[hsl(var(--muted-foreground))]">—</TableCell>
                           <TableCell className="text-right">{formatCurrency(p.gross_profit || 0)}</TableCell>
-                          <TableCell className={`text-right ${(p.net_profit || 0) >= 0 ? "text-green-500" : "text-red-500"}`}>
-                            {formatCurrency(p.net_profit || 0)}
-                          </TableCell>
-                          <TableCell className={`text-right ${(p.profit_rate || 0) >= 0 ? "text-green-500" : "text-red-500"}`}>
-                            {formatPercent(p.profit_rate || 0)}
-                          </TableCell>
+                          <TableCell className="text-right text-[hsl(var(--muted-foreground))]">—</TableCell>
+                          <TableCell className="text-right text-[hsl(var(--muted-foreground))]">—</TableCell>
                           <TableCell className="text-right">{formatNumber(p.total_sessions || 0)}</TableCell>
                           <TableCell className="text-right">
                             {(p.total_sessions || 0) > 0 && (p.total_sessions || 0) >= (p.total_orders || 0) * 0.5 ? formatPercent(((p.total_orders || 0) / p.total_sessions) * 100) : "-"}
                           </TableCell>
-                          <TableCell className="text-right">{formatCurrency(p.unit_profit || 0)}</TableCell>
+                          <TableCell className="text-right">—</TableCell>
                         </TableRow>
                       ))}
                     </>

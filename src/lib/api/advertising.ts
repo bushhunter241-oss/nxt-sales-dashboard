@@ -58,7 +58,7 @@ export async function getDailyAdSpendByDate(params: {
 }) {
   let query = supabase
     .from("daily_advertising")
-    .select("date, ad_spend");
+    .select("date, ad_spend, product:products(is_archived, is_parent)");
 
   if (params.startDate) query = query.gte("date", params.startDate);
   if (params.endDate) query = query.lte("date", params.endDate);
@@ -69,9 +69,11 @@ export async function getDailyAdSpendByDate(params: {
     return {};
   }
 
-  // Aggregate ad_spend by date
+  // Aggregate ad_spend by date (exclude archived/parent products)
   const byDate: Record<string, number> = {};
   for (const row of data || []) {
+    const product = row.product as any;
+    if (product?.is_archived || product?.is_parent) continue;
     byDate[row.date] = (byDate[row.date] || 0) + row.ad_spend;
   }
   return byDate;
@@ -80,16 +82,37 @@ export async function getDailyAdSpendByDate(params: {
 // ── キャンペーン単位の広告費（ASIN二重計上なし） ──
 
 /**
- * キャンペーン単位の広告費を商品グループ別に取得。
- * spAdvertisedProduct のASIN別合計ではなく、spCampaigns の正確な値。
+ * キャンペーン名 → 商品グループ のマッピング。
+ * Amazon広告のキャンペーン命名規則に基づく。
+ */
+const CAMPAIGN_GROUP_MAP: Record<string, string> = {
+  "01_feela": "feela",
+  "02_imin_Moon": "imin Moonシリーズ",
+  "03_imin_浄化香": "imin お香シリーズ",
+  "04_mobistick": "RHINON",
+  "05_imin_お得用": "imin お得用シリーズ",
+  "05_iminお得用": "imin お得用シリーズ",
+};
+
+function campaignNameToGroup(campaignName: string): string {
+  for (const [prefix, group] of Object.entries(CAMPAIGN_GROUP_MAP)) {
+    if (campaignName.startsWith(prefix)) return group;
+  }
+  return "未分類";
+}
+
+/**
+ * 広告費を商品グループ別に取得。
+ * キャンペーン名でグループに振り分け（ASIN単位の配分ではなくキャンペーン単位）。
+ * 同一キャンペーン内の複数ASINへの重複配分を防止。
  */
 export async function getCampaignAdSpendByGroup(params: {
   startDate?: string;
   endDate?: string;
 }): Promise<Record<string, { ad_spend: number; ad_sales: number; ad_orders: number }>> {
   let query = supabase
-    .from("daily_campaign_advertising")
-    .select("campaign_name, product_group, ad_spend, ad_sales, ad_orders");
+    .from("daily_advertising")
+    .select("campaign_name, ad_spend, ad_sales, ad_orders, product:products(is_archived, is_parent)");
 
   if (params.startDate) query = query.gte("date", params.startDate);
   if (params.endDate) query = query.lte("date", params.endDate);
@@ -99,7 +122,9 @@ export async function getCampaignAdSpendByGroup(params: {
 
   const byGroup: Record<string, { ad_spend: number; ad_sales: number; ad_orders: number }> = {};
   for (const row of data || []) {
-    const group = row.product_group || "未分類";
+    const product = row.product as any;
+    if (product?.is_archived || product?.is_parent) continue;
+    const group = row.campaign_name ? campaignNameToGroup(row.campaign_name) : "未分類";
     if (!byGroup[group]) byGroup[group] = { ad_spend: 0, ad_sales: 0, ad_orders: 0 };
     byGroup[group].ad_spend += row.ad_spend;
     byGroup[group].ad_sales += row.ad_sales;
@@ -109,66 +134,26 @@ export async function getCampaignAdSpendByGroup(params: {
 }
 
 /**
- * キャンペーン単位の日別広告費合計（ASIN二重計上なし）。
- * daily_campaign_advertising が空の場合は既存のASIN別データにフォールバック。
+ * 日別広告費合計。
+ * daily_campaign_advertising はデータが不完全なため、
+ * 常に daily_advertising（ASIN別）を使用する。
  */
 export async function getDailyAdSpendByDateCampaignLevel(params: {
   startDate?: string;
   endDate?: string;
 }): Promise<Record<string, number>> {
-  let query = supabase
-    .from("daily_campaign_advertising")
-    .select("date, ad_spend");
-
-  if (params.startDate) query = query.gte("date", params.startDate);
-  if (params.endDate) query = query.lte("date", params.endDate);
-
-  const { data, error } = await query;
-
-  // フォールバック: campaign テーブルが空ならASIN別データを使用
-  if (error || !data || data.length === 0) {
-    return getDailyAdSpendByDate(params);
-  }
-
-  const byDate: Record<string, number> = {};
-  for (const row of data) {
-    byDate[row.date] = (byDate[row.date] || 0) + row.ad_spend;
-  }
-  return byDate;
+  return getDailyAdSpendByDate(params);
 }
 
 /**
- * キャンペーン単位の広告費合計サマリー（ASIN二重計上なし）。
- * daily_campaign_advertising が空の場合は既存のgetAdSummaryにフォールバック。
+ * 広告費合計サマリー。
+ * daily_campaign_advertising はデータが不完全なため、常に daily_advertising を使用。
  */
 export async function getCampaignAdSummary(params: {
   startDate?: string;
   endDate?: string;
 }): Promise<{ total_ad_spend: number; total_ad_sales: number; total_ad_orders: number; total_impressions: number; total_clicks: number }> {
-  let query = supabase
-    .from("daily_campaign_advertising")
-    .select("ad_spend, ad_sales, ad_orders, impressions, clicks");
-
-  if (params.startDate) query = query.gte("date", params.startDate);
-  if (params.endDate) query = query.lte("date", params.endDate);
-
-  const { data, error } = await query;
-
-  // フォールバック
-  if (error || !data || data.length === 0) {
-    return getAdSummary(params);
-  }
-
-  return data.reduce(
-    (acc, row) => ({
-      total_ad_spend: acc.total_ad_spend + row.ad_spend,
-      total_ad_sales: acc.total_ad_sales + row.ad_sales,
-      total_ad_orders: acc.total_ad_orders + (row.ad_orders || 0),
-      total_impressions: acc.total_impressions + row.impressions,
-      total_clicks: acc.total_clicks + row.clicks,
-    }),
-    { total_ad_spend: 0, total_ad_sales: 0, total_ad_orders: 0, total_impressions: 0, total_clicks: 0 }
-  );
+  return getAdSummary(params);
 }
 
 export async function upsertDailyAdvertising(ad: Omit<DailyAdvertising, "id" | "created_at">) {

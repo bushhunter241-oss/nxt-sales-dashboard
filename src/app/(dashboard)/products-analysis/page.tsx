@@ -809,6 +809,8 @@ export default function ProductAnalysisPage() {
                 <YAxis type="category" dataKey="name" stroke="hsl(0 0% 50%)" fontSize={10} width={120} />
                 <Tooltip
                   contentStyle={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px", color: "#fff" }}
+                  labelStyle={{ color: "#fff", fontWeight: 600 }}
+                  itemStyle={{ color: "#fff" }}
                   formatter={(value: any, name: string) => name === "利益率" ? `${value}%` : formatCurrency(value)}
                 />
                 <ReferenceLine x={0} stroke="hsl(0 0% 40%)" />

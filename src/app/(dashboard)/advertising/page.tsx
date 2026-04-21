@@ -15,7 +15,7 @@ import { Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, L
 import { CHART_COLORS } from "@/lib/constants";
 
 export default function AdvertisingPage() {
-  const [period, setPeriod] = useState("30days");
+  const [period, setPeriod] = useState("this_month");
   const dateRange = getDateRange(period);
 
   const { data: adData = [] } = useQuery({

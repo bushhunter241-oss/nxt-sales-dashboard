@@ -808,10 +808,16 @@ export default function ProductAnalysisPage() {
                 <XAxis type="number" stroke="hsl(0 0% 50%)" fontSize={11} tickFormatter={(v) => `${v}%`} />
                 <YAxis type="category" dataKey="name" stroke="hsl(0 0% 50%)" fontSize={10} width={120} />
                 <Tooltip
-                  contentStyle={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px", color: "#fff" }}
-                  labelStyle={{ color: "#fff", fontWeight: 600 }}
-                  itemStyle={{ color: "#fff" }}
-                  formatter={(value: any, name: string) => name === "利益率" ? `${value}%` : formatCurrency(value)}
+                  content={({ active, payload, label }) => {
+                    if (!active || !payload?.length) return null;
+                    const v = payload[0]?.value;
+                    return (
+                      <div style={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px", padding: "8px 12px", color: "#fff" }}>
+                        <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
+                        <div style={{ color: "#fff" }}>利益率: {v}%</div>
+                      </div>
+                    );
+                  }}
                 />
                 <ReferenceLine x={0} stroke="hsl(0 0% 40%)" />
                 <Bar dataKey="利益率" radius={[0, 4, 4, 0]}>

@@ -470,10 +470,20 @@ export default function ProductAnalysisPage() {
     const totalSales = groupSummary.reduce((s: number, p: any) => s + (p.total_sales || 0), 0);
     const totalUnits = groupSummary.reduce((s: number, p: any) => s + (p.total_units || 0), 0);
     const totalOrders = groupSummary.reduce((s: number, p: any) => s + (p.total_orders || 0), 0);
-    const totalAdSpend = groupSummary.reduce((s: number, p: any) => s + (p.total_ad_spend || 0), 0);
     const totalAdSales = groupSummary.reduce((s: number, p: any) => s + (p.total_ad_sales || 0), 0);
 
-    // Cost info from first product (representative for unit economics)
+    // 商品別分析テーブルと一致させるためグループ集計値を優先利用
+    const matchingGroup = groupedProducts.find((g: any) => g.groupKey === detailGroup);
+    const totalAdSpend = matchingGroup?.total_ad_spend ?? groupSummary.reduce((s: number, p: any) => s + (p.total_ad_spend || 0), 0);
+
+    // 商品ごとの実コスト集計（ポイント原資も含む）— テーブルと同じロジック
+    const totalCost = groupSummary.reduce((s: number, p: any) => s + (p.total_cost || 0), 0);
+    const totalFbaFee = groupSummary.reduce((s: number, p: any) => s + (p.total_fba_fee || 0), 0);
+    const totalPointCost = groupSummary.reduce((s: number, p: any) => s + (p.total_point_cost || 0), 0);
+    const grossProfit = groupSummary.reduce((s: number, p: any) => s + (p.gross_profit || 0), 0);
+    const netProfit = grossProfit - totalAdSpend;
+
+    // Break-even ACoS は代表商品の単価経済性ベース（単価分析用）
     const rep = groupProds[0] || {};
     const costPerUnit = rep.cost_price || 0;
     const fbaFeeRate = rep.fba_fee_rate || 15;
@@ -481,20 +491,8 @@ export default function ProductAnalysisPage() {
     const sellingPrice = rep.selling_price || 0;
     const referralPerUnit = sellingPrice > 0 ? Math.round(sellingPrice * fbaFeeRate / 100) : 0;
     const grossProfitPerUnit = sellingPrice - costPerUnit - referralPerUnit - fbaShippingFee;
-
-    // Break-even ACoS = gross margin ratio (what % of ad-attributed sales can be spent on ads before going red)
-    // = grossProfitPerUnit / sellingPrice * 100
     const breakEvenAcos = sellingPrice > 0 ? (grossProfitPerUnit / sellingPrice) * 100 : 0;
-
-    // Current actual ACoS = ad_spend / ad_sales * 100
     const currentAcos = totalAdSales > 0 ? (totalAdSpend / totalAdSales) * 100 : 0;
-
-    // Total cost & profit
-    const totalCost = costPerUnit * totalUnits;
-    const totalReferral = Math.round(totalSales * fbaFeeRate / 100);
-    const totalShipping = fbaShippingFee * totalUnits;
-    const grossProfit = totalSales - totalCost - totalReferral - totalShipping;
-    const netProfit = grossProfit - totalAdSpend;
 
     // Goals
     const goal = (monthlyGoals as any[]).find((g: any) =>
@@ -513,7 +511,7 @@ export default function ProductAnalysisPage() {
       goal, projectedSales, projectedAdSpend, projectedProfit,
       sellingPrice,
     };
-  }, [detailGroup, products, currentMonthSummary, monthlyGoals, dayOfMonth, daysInMonth]);
+  }, [detailGroup, products, currentMonthSummary, monthlyGoals, dayOfMonth, daysInMonth, groupedProducts]);
 
   // AI Consultant chat state
   const [aiMessages, setAiMessages] = useState<Array<{ role: "user" | "assistant"; content: string }>>([]);

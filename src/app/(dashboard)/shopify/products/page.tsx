@@ -7,8 +7,8 @@ import { KPICard } from "@/components/layout/kpi-card";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatCurrency, formatNumber, formatPercent, getDateRange } from "@/lib/utils";
-import { getShopifyDailySalesWithCost } from "@/lib/api/shopify-sales";
-import { DollarSign, Package, TrendingUp, Wallet, ArrowUpDown } from "lucide-react";
+import { getShopifyDailySalesWithCost, getMetaAdSummary } from "@/lib/api/shopify-sales";
+import { DollarSign, Package, TrendingUp, Wallet, ArrowUpDown, Megaphone } from "lucide-react";
 import { Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart } from "recharts";
 import { CHART_COLORS } from "@/lib/constants";
 
@@ -35,6 +35,11 @@ export default function ShopifyProductsPage() {
   const { data: salesData = [] } = useQuery({
     queryKey: ["shopifyDailyCost", dateRange],
     queryFn: () => getShopifyDailySalesWithCost(dateRange),
+  });
+
+  const { data: metaAdSummary = { total_spend: 0 } } = useQuery({
+    queryKey: ["metaAdSummary", dateRange],
+    queryFn: () => getMetaAdSummary(dateRange),
   });
 
   // 商品別に集計
@@ -91,9 +96,11 @@ export default function ShopifyProductsPage() {
     else { setSortKey(key); setSortAsc(false); }
   };
 
-  // KPI
+  // KPI（Meta広告費を全体から差し引く — ダッシュボードのShopify利益と一致させる）
   const totalSales = products.reduce((s, p) => s + p.net_sales, 0);
-  const totalProfit = products.reduce((s, p) => s + p.profit, 0);
+  const totalGrossProfit = products.reduce((s, p) => s + p.profit, 0);
+  const totalAdSpend = metaAdSummary?.total_spend || 0;
+  const totalProfit = totalGrossProfit - totalAdSpend;
   const avgProfitRate = totalSales > 0 ? (totalProfit / totalSales) * 100 : 0;
   const totalProducts = products.length;
 
@@ -122,8 +129,9 @@ export default function ShopifyProductsPage() {
         <PeriodFilter value={period} onChange={setPeriod} />
       </PageHeader>
 
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-5">
         <KPICard title="売上合計" value={formatCurrency(totalSales)} icon={DollarSign} />
+        <KPICard title="広告費(Meta)" value={formatCurrency(totalAdSpend)} icon={Megaphone} />
         <KPICard title="利益合計" value={formatCurrency(totalProfit)} icon={Wallet} />
         <KPICard title="利益率" value={formatPercent(avgProfitRate)} icon={TrendingUp} />
         <KPICard title="商品数" value={formatNumber(totalProducts)} icon={Package} />

@@ -7,7 +7,7 @@ import { KPICard } from "@/components/layout/kpi-card";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatCurrency, formatPercent, formatNumber, formatDate, getDateRange } from "@/lib/utils";
-import { getRakutenDailySales, getRakutenDailyAdSpendByDate } from "@/lib/api/rakuten-sales";
+import { getRakutenDailySales, getRakutenDailyAdSpendByDate, getRakutenDailyCostBreakdown } from "@/lib/api/rakuten-sales";
 import { getRakutenProducts } from "@/lib/api/rakuten-products";
 import { DollarSign, TrendingUp, ShoppingCart, BarChart3, Wallet, Eye } from "lucide-react";
 import { Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ComposedChart, ReferenceLine } from "recharts";
@@ -28,7 +28,7 @@ interface DailyAggregated {
 }
 
 export default function RakutenDailyPage() {
-  const [period, setPeriod] = useState("30days");
+  const [period, setPeriod] = useState("this_month");
   const dateRange = getDateRange(period);
 
   const { data: salesData = [] } = useQuery({
@@ -39,6 +39,12 @@ export default function RakutenDailyPage() {
   const { data: adSpendByDate = {} } = useQuery({
     queryKey: ["rakutenDailyAdSpend", dateRange],
     queryFn: () => getRakutenDailyAdSpendByDate(dateRange),
+  });
+
+  // SKU別の正確な原価・送料を日別に取得（ダッシュボード/商品別分析と整合させる）
+  const { data: skuCostByDate = {} } = useQuery({
+    queryKey: ["rakutenDailySkuCost", dateRange],
+    queryFn: () => getRakutenDailyCostBreakdown(dateRange),
   });
 
   // All rakuten products for parent fallback
@@ -92,12 +98,21 @@ export default function RakutenDailyPage() {
     if (product) {
       const { costPrice, feeRate, shippingFee } = resolveProductCosts(product);
       const units = row.units_sold || 0;
+      // 商品マスタベースの原価・送料（SKU別データがない日のフォールバック用）
       acc[d].cost += costPrice * units;
       acc[d].fee += Math.round((row.sales_amount || 0) * (feeRate / 100));
       acc[d].shipping_fee += shippingFee * units;
     }
     return acc;
   }, {} as Record<string, DailyAggregated>);
+
+  // SKU別原価が取得できる日は商品マスタベースの値を上書き（より正確）
+  for (const [date, sku] of Object.entries(skuCostByDate as Record<string, { cost: number; shipping: number }>)) {
+    if (aggregated[date] && (sku.cost > 0 || sku.shipping > 0)) {
+      aggregated[date].cost = sku.cost;
+      aggregated[date].shipping_fee = sku.shipping;
+    }
+  }
 
   const dailyData: DailyAggregated[] = Object.values(aggregated)
     .map((day) => {

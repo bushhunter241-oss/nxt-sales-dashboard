@@ -282,6 +282,49 @@ async function getSkuCostsByProduct(
   return uuidResult;
 }
 
+/**
+ * 日別×SKU別の正確な原価・送料を取得。
+ * rakuten_daily_sku_sales (日別×SKU別販売数) + rakuten_sku_costs (SKU別原価) で集計し、
+ * date → { cost, shipping } のマップを返す。
+ */
+export async function getRakutenDailyCostBreakdown(params: {
+  startDate?: string;
+  endDate?: string;
+}): Promise<Record<string, { cost: number; shipping: number }>> {
+  // SKU別原価を全件取得
+  const { data: skuCosts } = await supabase
+    .from("rakuten_sku_costs")
+    .select("manage_number, sku_id, cost_price, shipping_fee");
+
+  const costMap = new Map<string, { cost_price: number; shipping_fee: number }>();
+  for (const sc of skuCosts || []) {
+    costMap.set(`${sc.manage_number}::${sc.sku_id}`, {
+      cost_price: sc.cost_price,
+      shipping_fee: sc.shipping_fee,
+    });
+  }
+
+  // 日別×SKU別販売数を取得
+  let skuQuery = supabase
+    .from("rakuten_daily_sku_sales")
+    .select("date, manage_number, sku_id, units_sold");
+
+  if (params.startDate) skuQuery = skuQuery.gte("date", params.startDate);
+  if (params.endDate) skuQuery = skuQuery.lte("date", params.endDate);
+
+  const { data: skuSales } = await skuQuery;
+
+  const result: Record<string, { cost: number; shipping: number }> = {};
+  for (const ss of skuSales || []) {
+    const cost = costMap.get(`${ss.manage_number}::${ss.sku_id || ""}`);
+    if (!cost) continue;
+    if (!result[ss.date]) result[ss.date] = { cost: 0, shipping: 0 };
+    result[ss.date].cost += cost.cost_price * ss.units_sold;
+    result[ss.date].shipping += cost.shipping_fee * ss.units_sold;
+  }
+  return result;
+}
+
 export async function getRakutenProductSalesSummary(params: {
   startDate?: string;
   endDate?: string;

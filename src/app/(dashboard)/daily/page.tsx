@@ -9,6 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { formatCurrency, formatPercent, formatNumber, formatDate, getDateRange } from "@/lib/utils";
 import { getDailySales } from "@/lib/api/sales";
 import { getDailyAdSpendByDateCampaignLevel } from "@/lib/api/advertising";
+import { supabase } from "@/lib/supabase";
 import { DollarSign, TrendingUp, ShoppingCart, BarChart3, Wallet } from "lucide-react";
 import { Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ComposedChart, ReferenceLine } from "recharts";
 import { CHART_COLORS } from "@/lib/constants";
@@ -21,13 +22,15 @@ interface DailyAggregated {
   units_sold: number;
   cost: number;
   fba_fee: number;
+  point_cost: number;
+  expenses: number;
   ad_spend: number;
   profit: number;
   profit_rate: number;
 }
 
 export default function DailyAnalysisPage() {
-  const [period, setPeriod] = useState("30days");
+  const [period, setPeriod] = useState("this_month");
   const dateRange = getDateRange(period);
 
   const { data: salesData = [] } = useQuery({
@@ -40,38 +43,89 @@ export default function DailyAnalysisPage() {
     queryFn: () => getDailyAdSpendByDateCampaignLevel(dateRange),
   });
 
+  // 施策カレンダーのポイント施策（イベント単位の追加ポイント原資）
+  const { data: pointEvents = [] } = useQuery({
+    queryKey: ["pointEvents", dateRange],
+    queryFn: async () => {
+      let q = supabase.from("product_events").select("date, product_group, discount_rate").eq("event_type", "point");
+      if (dateRange.startDate) q = q.gte("date", dateRange.startDate);
+      if (dateRange.endDate) q = q.lte("date", dateRange.endDate);
+      const { data } = await q;
+      return data || [];
+    },
+  });
+
+  // 経費（商品別経費のみ。product_id=null の全体経費はダッシュボード合計と整合させるため除外）
+  const { data: expensesData = [] } = useQuery({
+    queryKey: ["dailyExpenses", dateRange],
+    queryFn: async () => {
+      let q = supabase.from("expenses").select("date, amount, product_id");
+      if (dateRange.startDate) q = q.gte("date", dateRange.startDate);
+      if (dateRange.endDate) q = q.lte("date", dateRange.endDate);
+      const { data } = await q;
+      return data || [];
+    },
+  });
+
+  // ポイント施策ルックアップ: "date|product_group" → discount_rate
+  const pointEventMap: Record<string, number> = {};
+  for (const ev of pointEvents as any[]) {
+    if (!ev.discount_rate || !ev.product_group) continue;
+    const key = `${ev.date}|${ev.product_group}`;
+    pointEventMap[key] = Math.max(pointEventMap[key] || 0, ev.discount_rate);
+  }
+
+  // 日別経費合計
+  const expensesByDate: Record<string, number> = {};
+  for (const ex of expensesData as any[]) {
+    if (!ex.product_id) continue; // 全体経費は除外
+    expensesByDate[ex.date] = (expensesByDate[ex.date] || 0) + ex.amount;
+  }
+
   // Aggregate by date with profit calculation
   const aggregated = (salesData as any[]).reduce((acc: Record<string, DailyAggregated>, row: any) => {
     const d = row.date;
     if (!acc[d]) {
-      acc[d] = { date: d, sales_amount: 0, orders: 0, sessions: 0, units_sold: 0, cost: 0, fba_fee: 0, ad_spend: 0, profit: 0, profit_rate: 0 };
+      acc[d] = { date: d, sales_amount: 0, orders: 0, sessions: 0, units_sold: 0, cost: 0, fba_fee: 0, point_cost: 0, expenses: 0, ad_spend: 0, profit: 0, profit_rate: 0 };
     }
     acc[d].sales_amount += row.sales_amount;
     acc[d].orders += row.orders;
     acc[d].sessions += row.sessions;
     acc[d].units_sold += row.units_sold;
 
-    // Per-product cost and FBA fee calculation
+    // Per-product cost and FBA fee calculation (sales.ts getProductSalesSummary と同じ計算式)
     const product = row.product;
     if (product) {
       const costPrice = product.cost_price || 0;
       const fbaFeeRate = product.fba_fee_rate || 15;
       const fbaShippingFee = product.fba_shipping_fee || 0;
+      const pointRate = product.point_rate || 0;
       const units = row.units_sold || 0;
       acc[d].cost += costPrice * units;
       acc[d].fba_fee += Math.round(row.sales_amount * (fbaFeeRate / 100)) + fbaShippingFee * units;
+      acc[d].point_cost += Math.round(row.sales_amount * (pointRate / 100));
+
+      // 施策カレンダーのイベント型ポイント施策（該当日×商品グループ）
+      const productGroup = product.product_group;
+      if (productGroup && row.date) {
+        const eventRate = pointEventMap[`${row.date}|${productGroup}`];
+        if (eventRate) {
+          acc[d].point_cost += Math.round(row.sales_amount * (eventRate / 100));
+        }
+      }
     }
 
     return acc;
   }, {} as Record<string, DailyAggregated>);
 
-  // Add ad spend and calculate profit
+  // Add ad spend, expenses, and calculate profit
   const dailyData: DailyAggregated[] = Object.values(aggregated)
     .map((day) => {
       const adSpend = (adSpendByDate as Record<string, number>)[day.date] || 0;
-      const profit = day.sales_amount - day.cost - day.fba_fee - adSpend;
+      const expenses = expensesByDate[day.date] || 0;
+      const profit = day.sales_amount - day.cost - day.fba_fee - day.point_cost - expenses - adSpend;
       const profitRate = day.sales_amount > 0 ? (profit / day.sales_amount) * 100 : 0;
-      return { ...day, ad_spend: adSpend, profit, profit_rate: profitRate };
+      return { ...day, ad_spend: adSpend, expenses, profit, profit_rate: profitRate };
     })
     .sort((a, b) => b.date.localeCompare(a.date));
 
@@ -114,7 +168,7 @@ export default function DailyAnalysisPage() {
               <XAxis dataKey="date" stroke="hsl(0 0% 50%)" fontSize={12} />
               <YAxis stroke="hsl(0 0% 50%)" fontSize={12} tickFormatter={(v) => `¥${(v / 10000).toFixed(0)}万`} />
               <Tooltip
-                contentStyle={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px" }}
+                contentStyle={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px", color: "#fff" }}
                 formatter={(value: number, name: string) => [formatCurrency(value), name]}
               />
               <Legend />

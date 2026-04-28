@@ -291,11 +291,42 @@ Supabaseはデフォルトで1リクエスト最大1000件しか返さない。`
 
 ---
 
-## TODO（将来対応）
+## 認証・セキュリティ運用方針（現状）
 
-### 同期エンドポイントの認証強化（Server Actions 化）
-現在、UI から呼び出している同期エンドポイントは**アプリ内認証を行っていない**。
-外部からの不正アクセスは **Vercel Deployment Protection** で遮断する前提で運用している。
+Vercel Hobbyプランでは Deployment Protection の "All Deployments" が使えないため、
+**`src/middleware.ts` でBasic認証**をアプリレイヤーに実装している。
+
+**認証スキップ条件:**
+- 開発環境 (`NODE_ENV=development`)
+- `/api/health`（外部監視ツール用）
+- `/api/cron/*` 配下で `Authorization: Bearer ${CRON_SECRET}` を送ってきた場合（Vercel Cron）
+- 静的アセット（matcher で除外済み）
+
+**環境変数（Vercel Production+Preview）:**
+- `BASIC_AUTH_USER` / `BASIC_AUTH_PASSWORD` — 未設定だと middleware が500を返す（fail-closed）
+- `CRON_SECRET` — Vercel Cron 専用の Bearer トークン
+
+---
+
+## TODO（明日以降の対応）
+
+### 1. 14項目フルスキャンレビューの実施
+差分レビューでは検出できない論点（既存コードの構造的問題、未使用の脆弱性、データ整合性など）をカバーするため、
+別途フルスキャンレビューを `/codex:adversarial-review` で実施する。
+
+### 2. Vercel環境変数の Sensitive 化
+Vercel ダッシュボードで「Needs Attention」タグが付いている以下を Sensitive 化する:
+- `META_ACCESS_TOKEN`
+- `SHOPIFY_ACCESS_TOKEN`
+- `SHOPIFY_CLIENT_SECRET`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `CREDENTIALS_ENCRYPTION_KEY`
+- `PGPASSWORD`
+- `CRON_SECRET`
+
+### 3. 同期エンドポイントの Server Actions 化
+現在、UI から呼び出している同期エンドポイントは**アプリ内認証を行っていない**（Basic認証通過後のセッションを暗黙に信頼）。
+将来的に Server Actions 化して、サーバ側で `CRON_SECRET` を内部付与する形にリファクタする。
 
 対象エンドポイント:
 - `POST /api/sync/sp-api`（Amazon売上同期）
@@ -303,12 +334,34 @@ Supabaseはデフォルトで1リクエスト最大1000件しか返さない。`
 - `POST /api/rakuten/sync`（楽天売上同期）
 - `POST /api/meta/sync`（Meta広告同期）
 
-**やりたいこと:**
-これらを Next.js の **Server Actions** に切り替え、サーバ側で `CRON_SECRET` を内部的に付与する形にする。
-そうすれば Deployment Protection に依存せず、アプリレイヤーで認可制御できる。
+---
 
-**やらない理由（現状）:**
-- Deployment Protection で十分実用的
-- Server Actions への移行は工数中規模（UIコンポーネントの書き換え＋エラーハンドリング再設計）
+## 🚨 明日朝のチェック項目（リマインダー）
 
-**参考: Codexレビュー指摘:** `/api/meta/sync` の P1 セキュリティ指摘 (2026-04-28) — Deployment Protection 前提として認証は追加せずに撤回した。
+**Vercel Logs で `/api/cron/*` の動作確認:**
+- 毎日 2:00 AM JST に Vercel cron が `/api/cron/sync` を呼ぶ
+- ログで **200 OK** を確認すること
+- 万一 **401 Unauthorized** になっていたら、`CRON_SECRET` 環境変数が正しく Vercel に設定されているか・middleware の `pathname.startsWith("/api/cron/")` 判定が効いているかを確認
+
+確認URL: https://vercel.com/{team}/nxt-sales-dashboard/logs
+
+---
+
+## 今日完了した作業（2026-04-28）
+
+- Codexレビュー導入（`/codex:review`, `/codex:adversarial-review`）
+- Shopify OAuth state検証の修復（P1）
+- Shopify access tokenのログ出力削除（P1）
+- 認証なしのデバッグエンドポイント削除/保護（P1）
+- `target_profit` / `target_ad_budget` の0値保存修正（P2）
+- 旧フォーマットgoals互換parse維持（P2）
+- Meta広告テーブルの `<tbody>` ネスト修正（P2）
+- `shopify_shipping_fee` マイグレーション追加（P2）
+- 楽天access CSV importヘッダー検出修正（P2）
+- `src/middleware.ts` でBasic認証実装（fail-closed設計）
+- middleware.ts の `CRON_SECRET` バイパスを `/api/cron/*` に限定
+- `meta/sync.ts` で `omni_add_to_cart` / `omni_purchase` / `action_values` 対応
+- `monthly/page.tsx` でイベント型ポイント原資反映 + CSV補正月の比例スケーリング
+- `.gitignore` に `.claude/settings.local.json` 等を追加
+- 各モール×ダッシュボードの利益計算整合性修正
+  （Amazon日別/月別、楽天日別、Shopify商品別 すべてダッシュボード合計と一致）

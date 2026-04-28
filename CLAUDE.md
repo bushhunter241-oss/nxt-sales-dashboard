@@ -264,3 +264,51 @@ git push origin main
 - FBA配送手数料（`fba_shipping_fee`）とAmazon紹介料（`fba_fee_rate`）は**別物**。混同しないこと
 - 日次データの日付はJST基準（`new Date().getTime() + 9*60*60*1000`）でバケットする
 - Vercel無料プランの制約: サーバーレス関数の最大実行時間は60秒（`export const maxDuration = 60`）
+
+---
+
+## 既知の注意点・過去の修正履歴
+
+### fba_fee_rate のデフォルト値は 15%（0%にしないこと）
+Amazon日本では全カテゴリ最低8%の紹介料がかかる。`fba_fee_rate`が未設定(NULL/0)の商品には**必ず15%をデフォルト適用**すること。
+コード上では `product.fba_fee_rate || 15` と書く。`|| 0` にすると利益が過大表示される。
+- 対象箇所: `sales.ts`, `daily/page.tsx`, `monthly/page.tsx`, `products-analysis/page.tsx`
+
+### Supabase PostgREST の最大行数制限（1000件）
+Supabaseはデフォルトで1リクエスト最大1000件しか返さない。`.limit(5000)` をクライアントで指定しても無視される。
+全件取得が必要な場合は `.range()` を使ったページネーションを実装すること。
+- `getDailySales()` は `fetchAllSales()` でページネーション済み（1000件ずつ取得）
+
+### 広告データのテーブル構造
+- `daily_advertising`: ASIN（商品）単位の広告データ。SP広告のspAdvertisedProductレポートから取得。データは蓄積されている
+- `daily_campaign_advertising`: キャンペーン単位の広告データ。現状データが不完全（一部の日のみ）
+- `getDailyAdSpendByDateCampaignLevel()` は `daily_campaign_advertising` を優先し、空の場合のみ `daily_advertising` にフォールバックする。**部分的にデータがあるとフォールバックが効かず、広告費が過少表示される**ため、現在は `getDailyAdSpendByDate()`（daily_advertisingのみ使用）を直接呼び出すように修正済み
+
+### SP-API同期のタイミング
+- Vercel cronは毎日 2:00 AM JST に実行。過去3日分の注文データを取得
+- 当日（昨日）の売上はcron実行時点までの注文のみ反映される。セラーセントラルとの差異は翌日のcronで解消される
+- 手動同期: `POST /api/sync/sp-api` に `{"startDate": "YYYY-MM-DD", "endDate": "YYYY-MM-DD"}` を送信
+
+---
+
+## TODO（将来対応）
+
+### 同期エンドポイントの認証強化（Server Actions 化）
+現在、UI から呼び出している同期エンドポイントは**アプリ内認証を行っていない**。
+外部からの不正アクセスは **Vercel Deployment Protection** で遮断する前提で運用している。
+
+対象エンドポイント:
+- `POST /api/sync/sp-api`（Amazon売上同期）
+- `POST /api/sync/ads-api`（Amazon広告同期）
+- `POST /api/rakuten/sync`（楽天売上同期）
+- `POST /api/meta/sync`（Meta広告同期）
+
+**やりたいこと:**
+これらを Next.js の **Server Actions** に切り替え、サーバ側で `CRON_SECRET` を内部的に付与する形にする。
+そうすれば Deployment Protection に依存せず、アプリレイヤーで認可制御できる。
+
+**やらない理由（現状）:**
+- Deployment Protection で十分実用的
+- Server Actions への移行は工数中規模（UIコンポーネントの書き換え＋エラーハンドリング再設計）
+
+**参考: Codexレビュー指摘:** `/api/meta/sync` の P1 セキュリティ指摘 (2026-04-28) — Deployment Protection 前提として認証は追加せずに撤回した。

@@ -27,9 +27,26 @@ export async function syncMetaAds(dateFrom: string, dateTo: string) {
   const errors: string[] = [];
 
   for (const row of insights) {
-    const purchases = parseInt(row.actions?.find(a => a.action_type === "purchase")?.value || "0") || 0;
-    const addToCart = parseInt(row.actions?.find(a => a.action_type === "add_to_cart")?.value || "0") || 0;
-    const purchaseValue = parseFloat(row.actions?.find(a => a.action_type === "omni_purchase")?.value || row.actions?.find(a => a.action_type === "purchase")?.value || "0") || 0;
+    // actions = アクション件数（購入なら回数）
+    // omni_* (Pixel + アプリ + オフライン統合) を優先、なければチャネル別の値
+    const purchases = parseInt(
+      row.actions?.find(a => a.action_type === "omni_purchase")?.value
+        || row.actions?.find(a => a.action_type === "purchase")?.value
+        || "0"
+    ) || 0;
+    const addToCart = parseInt(
+      row.actions?.find(a => a.action_type === "omni_add_to_cart")?.value
+        || row.actions?.find(a => a.action_type === "add_to_cart")?.value
+        || "0"
+    ) || 0;
+
+    // action_values = アクション金額（購入なら売上額）
+    // omni_purchase が存在すればそちらを優先、なければ purchase
+    const purchaseValue = parseFloat(
+      row.action_values?.find(a => a.action_type === "omni_purchase")?.value
+        || row.action_values?.find(a => a.action_type === "purchase")?.value
+        || "0"
+    ) || 0;
 
     const spend = Math.round(parseFloat(row.spend) || 0);
 
@@ -43,11 +60,11 @@ export async function syncMetaAds(dateFrom: string, dateTo: string) {
       spend,
       purchases,
       add_to_cart: addToCart,
-      purchase_value: Math.round(purchaseValue * (spend || 1)),
+      purchase_value: Math.round(purchaseValue),
       cpm: parseFloat(row.cpm) || 0,
       cpc: parseFloat(row.cpc) || 0,
       ctr: parseFloat(row.ctr) || 0,
-      roas: purchaseValue > 0 && spend > 0 ? purchaseValue : 0,
+      roas: spend > 0 ? purchaseValue / spend : 0,
     };
 
     const { error } = await db.from("meta_ad_daily").insert(record);

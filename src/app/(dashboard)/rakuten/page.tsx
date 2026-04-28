@@ -15,7 +15,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 const RAKUTEN_CHART_COLOR = "#bf0000";
 
 export default function RakutenDashboardPage() {
-  const [period, setPeriod] = useState("30days");
+  const [period, setPeriod] = useState("this_month");
   const dateRange = getDateRange(period);
 
   const { data: dailySales = [] } = useQuery({

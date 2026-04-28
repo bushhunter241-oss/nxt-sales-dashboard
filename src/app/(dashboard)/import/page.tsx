@@ -52,7 +52,20 @@ export default function ImportPage() {
     setStatus(null);
 
     try {
-      const text = await file.text();
+      let text = await file.text();
+
+      // 楽天アクセスCSV: 先頭の "#" メタデータ行を読み飛ばし、
+      // 「商品管理番号」を含む実ヘッダー行から始める
+      if (importType === "rakuten_access") {
+        const lines = text.split("\n");
+        const headerIdx = lines.findIndex((l) => {
+          const trimmed = l.trim();
+          if (!trimmed || trimmed.startsWith("#")) return false;
+          return l.includes("商品管理番号");
+        });
+        if (headerIdx > 0) text = lines.slice(headerIdx).join("\n");
+      }
+
       const { data: rows } = Papa.parse(text, { header: true, skipEmptyLines: true });
       let imported = 0;
       let skipped = 0;
@@ -149,7 +162,7 @@ export default function ImportPage() {
         // 楽天アクセス・売上CSV
         for (const row of rows as any[]) {
           // 商品番号 or 商品管理番号 で楽天商品を検索
-          const productNumber = row["商品番号"] || row["商品管理番号"] || row["商品URL"] || "";
+          const productNumber = row["商品管理番号"] || row["商品番号"] || row["商品URL"] || "";
           if (!productNumber) { skipped++; continue; }
 
           // product_id (商品管理番号) で検索

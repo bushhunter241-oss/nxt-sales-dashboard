@@ -1285,12 +1285,18 @@ export default function ApiIntegrationPage() {
         <ShopifySection />
       </div>
 
+      {/* ---- Meta広告 セクション ---- */}
+      <div className="border-t pt-6 mt-2">
+        <h2 className="text-lg font-bold mb-4 text-blue-400">Meta広告（Facebook / Instagram）</h2>
+        <MetaAdSection />
+      </div>
+
       <SyncHistory logs={syncLogs} />
     </div>
   );
 }
 
-// ---- Shopify連携セクション ----
+// ---- Shopify連携セクション（環境変数トークン方式） ----
 function ShopifySection() {
   const [status, setStatus] = useState<"idle" | "loading" | "connected" | "error">("idle");
   const [shopName, setShopName] = useState("");
@@ -1303,24 +1309,9 @@ function ShopifySection() {
   });
   const [syncTo, setSyncTo] = useState(() => new Date().toISOString().split("T")[0]);
 
-  // URL パラメータチェック（OAuth コールバック後）
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get("shopify_success") === "true") {
-      setStatus("connected");
-      setSyncResult("Shopify連携が完了しました！");
-      // URLパラメータをクリア
-      window.history.replaceState({}, "", window.location.pathname);
-    } else if (params.get("shopify_error")) {
-      setStatus("error");
-      setErrorMsg(`OAuth認証エラー: ${params.get("shopify_error")}`);
-      window.history.replaceState({}, "", window.location.pathname);
-    }
-  }, []);
-
-  // 接続テスト
   const testConnection = async () => {
     setStatus("loading");
+    setErrorMsg("");
     try {
       const res = await fetch("/api/shopify/test");
       const data = await res.json();
@@ -1337,10 +1328,8 @@ function ShopifySection() {
     }
   };
 
-  // 初回チェック
-  useEffect(() => { testConnection(); }, []);
+  useEffect(() => { testConnection().catch(() => setStatus("error")); }, []);
 
-  // 売上同期
   const handleSync = async () => {
     setSyncing(true);
     setSyncResult("");
@@ -1370,11 +1359,9 @@ function ShopifySection() {
             {status === "error" && <Badge variant="destructive">未接続</Badge>}
             {status === "loading" && <Loader2 className="h-4 w-4 animate-spin" />}
           </div>
-          {status !== "connected" && (
-            <Button onClick={() => { window.location.href = "/api/shopify/auth"; }} variant="default" size="sm">
-              <Link2 className="h-4 w-4 mr-1" /> Shopify連携する
-            </Button>
-          )}
+          <Button variant="outline" size="sm" onClick={testConnection} disabled={status === "loading"}>
+            <RefreshCw className={`h-3 w-3 mr-1 ${status === "loading" ? "animate-spin" : ""}`} /> 接続テスト
+          </Button>
         </div>
 
         {shopName && (
@@ -1382,36 +1369,124 @@ function ShopifySection() {
         )}
 
         {status === "error" && errorMsg && (
-          <div className="rounded-md bg-red-900/20 p-3 text-sm text-red-400">{errorMsg}</div>
+          <div className="rounded-md bg-red-900/20 p-3 text-sm text-red-400">
+            {errorMsg}
+            <p className="mt-1 text-xs opacity-70">環境変数 SHOPIFY_ACCESS_TOKEN と SHOPIFY_STORE_DOMAIN がVercelに設定されているか確認してください</p>
+          </div>
         )}
 
-        {status === "connected" && (
-          <>
-            <div className="flex items-center gap-2">
-              <Button variant="outline" size="sm" onClick={testConnection}>
-                <RefreshCw className="h-3 w-3 mr-1" /> 接続テスト
-              </Button>
-              <Button variant="outline" size="sm" onClick={() => { window.location.href = "/api/shopify/auth"; }}>
-                再連携
-              </Button>
-            </div>
+        <div className="border-t pt-4">
+          <h4 className="text-sm font-medium mb-2">売上データ同期</h4>
+          <div className="flex items-center gap-2">
+            <Input type="date" value={syncFrom} onChange={e => setSyncFrom(e.target.value)} className="w-40" />
+            <span className="text-sm">〜</span>
+            <Input type="date" value={syncTo} onChange={e => setSyncTo(e.target.value)} className="w-40" />
+            <Button onClick={handleSync} disabled={syncing || status !== "connected"} size="sm">
+              {syncing ? <><Loader2 className="h-3 w-3 mr-1 animate-spin" /> 同期中...</> : <><Play className="h-3 w-3 mr-1" /> 同期実行</>}
+            </Button>
+          </div>
+          {syncResult && (
+            <p className="mt-2 text-sm text-[hsl(var(--muted-foreground))]">{syncResult}</p>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
 
-            <div className="border-t pt-4">
-              <h4 className="text-sm font-medium mb-2">売上データ同期</h4>
-              <div className="flex items-center gap-2">
-                <Input type="date" value={syncFrom} onChange={e => setSyncFrom(e.target.value)} className="w-40" />
-                <span className="text-sm">〜</span>
-                <Input type="date" value={syncTo} onChange={e => setSyncTo(e.target.value)} className="w-40" />
-                <Button onClick={handleSync} disabled={syncing} size="sm">
-                  {syncing ? <><Loader2 className="h-3 w-3 mr-1 animate-spin" /> 同期中...</> : <><Play className="h-3 w-3 mr-1" /> 同期実行</>}
-                </Button>
-              </div>
-              {syncResult && (
-                <p className="mt-2 text-sm text-[hsl(var(--muted-foreground))]">{syncResult}</p>
-              )}
-            </div>
-          </>
+// ---- Meta広告セクション（環境変数トークン方式） ----
+function MetaAdSection() {
+  const [status, setStatus] = useState<"idle" | "loading" | "connected" | "error">("idle");
+  const [accountName, setAccountName] = useState("");
+  const [errorMsg, setErrorMsg] = useState("");
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState("");
+  const [syncFrom, setSyncFrom] = useState(() => {
+    const d = new Date(); d.setDate(d.getDate() - 30);
+    return d.toISOString().split("T")[0];
+  });
+  const [syncTo, setSyncTo] = useState(() => new Date().toISOString().split("T")[0]);
+
+  const testConnection = async () => {
+    setStatus("loading");
+    setErrorMsg("");
+    try {
+      const res = await fetch("/api/meta/test");
+      const data = await res.json();
+      if (data.success) {
+        setStatus("connected");
+        setAccountName(data.accountName || "");
+      } else {
+        setStatus("error");
+        setErrorMsg(data.error || "接続テスト失敗");
+      }
+    } catch {
+      setStatus("error");
+      setErrorMsg("接続テスト中にエラーが発生しました");
+    }
+  };
+
+  useEffect(() => { testConnection().catch(() => setStatus("error")); }, []);
+
+  const handleSync = async () => {
+    setSyncing(true);
+    setSyncResult("");
+    try {
+      const res = await fetch("/api/meta/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dateFrom: syncFrom, dateTo: syncTo }),
+      });
+      const data = await res.json();
+      setSyncResult(data.message || (data.success ? "同期完了" : "同期失敗"));
+    } catch (err: any) {
+      setSyncResult(`エラー: ${err.message}`);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardContent className="p-6 space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="text-lg">🔵</span>
+            <h3 className="font-bold">Meta広告</h3>
+            {status === "connected" && <Badge variant="success">接続済み</Badge>}
+            {status === "error" && <Badge variant="destructive">未接続</Badge>}
+            {status === "loading" && <Loader2 className="h-4 w-4 animate-spin" />}
+          </div>
+          <Button variant="outline" size="sm" onClick={testConnection} disabled={status === "loading"}>
+            <RefreshCw className={`h-3 w-3 mr-1 ${status === "loading" ? "animate-spin" : ""}`} /> 接続テスト
+          </Button>
+        </div>
+
+        {accountName && (
+          <p className="text-sm text-[hsl(var(--muted-foreground))]">アカウント: {accountName}</p>
         )}
+
+        {status === "error" && errorMsg && (
+          <div className="rounded-md bg-red-900/20 p-3 text-sm text-red-400">
+            {errorMsg}
+            <p className="mt-1 text-xs opacity-70">環境変数 META_AD_ACCOUNT_ID と META_ACCESS_TOKEN がVercelに設定されているか確認してください。トークンは60日有効（2026/05/12期限）。</p>
+          </div>
+        )}
+
+        <div className="border-t pt-4">
+          <h4 className="text-sm font-medium mb-2">広告データ同期</h4>
+          <div className="flex items-center gap-2">
+            <Input type="date" value={syncFrom} onChange={e => setSyncFrom(e.target.value)} className="w-40" />
+            <span className="text-sm">〜</span>
+            <Input type="date" value={syncTo} onChange={e => setSyncTo(e.target.value)} className="w-40" />
+            <Button onClick={handleSync} disabled={syncing || status !== "connected"} size="sm">
+              {syncing ? <><Loader2 className="h-3 w-3 mr-1 animate-spin" /> 同期中...</> : <><Play className="h-3 w-3 mr-1" /> 同期実行</>}
+            </Button>
+          </div>
+          {syncResult && (
+            <p className="mt-2 text-sm text-[hsl(var(--muted-foreground))]">{syncResult}</p>
+          )}
+        </div>
       </CardContent>
     </Card>
   );

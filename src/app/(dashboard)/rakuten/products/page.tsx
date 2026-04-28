@@ -15,7 +15,7 @@ import { Input } from "@/components/ui/input";
 import { BarChart, Bar, LineChart, Line, ComposedChart, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, PieChart, Pie, Cell, ReferenceLine } from "recharts";
 import { CHART_COLORS } from "@/lib/constants";
 
-// Product group color mapping (partial match)
+// Product group color mapping (same as Amazon products-analysis)
 const GROUP_COLOR_RULES: Array<{ match: string; color: string }> = [
   { match: "feela", color: "#22c55e" },
   { match: "Moon", color: "#eab308" },
@@ -23,6 +23,11 @@ const GROUP_COLOR_RULES: Array<{ match: string; color: string }> = [
   { match: "お得用", color: "#ec4899" },
   { match: "RHINON", color: "#3b82f6" },
   { match: "ホワイトセージ", color: "#6b7280" },
+  { match: "imin03", color: "#f97316" },
+  { match: "imin02", color: "#eab308" },
+  { match: "imin01", color: "#ec4899" },
+  { match: "imin05", color: "#6b7280" },
+  { match: "imin06", color: "#3b82f6" },
 ];
 
 const EVENT_TYPE_LABELS: Record<string, string> = {
@@ -731,7 +736,9 @@ export default function RakutenProductAnalysisPage() {
                 <XAxis type="number" stroke="hsl(0 0% 50%)" fontSize={11} tickFormatter={(v) => `¥${(v / 10000).toFixed(0)}万`} />
                 <YAxis type="category" dataKey="name" stroke="hsl(0 0% 50%)" fontSize={10} width={120} />
                 <Tooltip
-                  contentStyle={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px" }}
+                  contentStyle={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px", color: "#fff" }}
+                  labelStyle={{ color: "hsl(0 0% 70%)" }}
+                  itemStyle={{ color: "#fff" }}
                   formatter={(value: any) => formatCurrency(value)}
                 />
                 <Legend />
@@ -756,13 +763,15 @@ export default function RakutenProductAnalysisPage() {
                 <XAxis type="number" stroke="hsl(0 0% 50%)" fontSize={11} tickFormatter={(v) => `${v}%`} />
                 <YAxis type="category" dataKey="name" stroke="hsl(0 0% 50%)" fontSize={10} width={120} />
                 <Tooltip
-                  contentStyle={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px" }}
+                  contentStyle={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px", color: "#fff" }}
+                  labelStyle={{ color: "hsl(0 0% 70%)" }}
+                  itemStyle={{ color: "#fff" }}
                   formatter={(value: any, name: string) => name === "利益率" ? `${value}%` : formatCurrency(value)}
                 />
                 <ReferenceLine x={0} stroke="hsl(0 0% 40%)" />
                 <Bar dataKey="利益率" radius={[0, 4, 4, 0]}>
                   {profitRateData.map((entry: any, i: number) => (
-                    <Cell key={i} fill={entry["利益率"] >= 0 ? "#22c55e" : "#ef4444"} />
+                    <Cell key={i} fill={entry["利益率"] >= 0 ? getGroupColor(entry.name, i) : "#ef4444"} />
                   ))}
                 </Bar>
               </BarChart>
@@ -785,7 +794,7 @@ export default function RakutenProductAnalysisPage() {
                     <Cell key={i} fill={entry.color} />
                   ))}
                 </Pie>
-                <Tooltip contentStyle={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px" }} formatter={(value: any) => formatCurrency(value)} />
+                <Tooltip contentStyle={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px", color: "#fff" }} labelStyle={{ color: "hsl(0 0% 70%)" }} itemStyle={{ color: "#fff" }} formatter={(value: any) => formatCurrency(value)} />
                 <Legend />
               </PieChart>
             </ResponsiveContainer>
@@ -937,7 +946,7 @@ export default function RakutenProductAnalysisPage() {
                   }
                 />
                 <Tooltip
-                  contentStyle={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px" }}
+                  contentStyle={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px", color: "#fff" }}
                   formatter={(value: any) =>
                     metricsTab === "sales" || metricsTab === "profit"
                       ? formatCurrency(value)
@@ -994,7 +1003,7 @@ export default function RakutenProductAnalysisPage() {
                     <YAxis yAxisId="left" stroke="hsl(0 0% 50%)" fontSize={10} />
                     <YAxis yAxisId="right" orientation="right" stroke="hsl(0 0% 40%)" fontSize={10} tickFormatter={(v) => `${v}%`} />
                     <Tooltip
-                      contentStyle={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px" }}
+                      contentStyle={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px", color: "#fff" }}
                       formatter={(value: any, name: string) => name.includes("CVR") ? `${value}%` : formatNumber(value)}
                       content={({ active, payload, label }) => {
                         if (!active || !payload?.length) return null;
@@ -1044,7 +1053,7 @@ export default function RakutenProductAnalysisPage() {
                     <XAxis dataKey="date" stroke="hsl(0 0% 50%)" fontSize={10} />
                     <YAxis stroke="hsl(0 0% 50%)" fontSize={10} tickFormatter={(v) => `¥${(v / 10000).toFixed(0)}万`} />
                     <Tooltip
-                      contentStyle={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px" }}
+                      contentStyle={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px", color: "#fff" }}
                       content={({ active, payload, label }) => {
                         if (!active || !payload?.length) return null;
                         const entry = payload[0]?.payload;
@@ -1092,7 +1101,7 @@ export default function RakutenProductAnalysisPage() {
                     <XAxis dataKey="date" stroke="hsl(0 0% 50%)" fontSize={10} />
                     <YAxis stroke="hsl(0 0% 50%)" fontSize={10} />
                     <Tooltip
-                      contentStyle={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px" }}
+                      contentStyle={{ backgroundColor: "hsl(0 0% 12%)", border: "1px solid hsl(0 0% 20%)", borderRadius: "8px", color: "#fff" }}
                       content={({ active, payload, label }) => {
                         if (!active || !payload?.length) return null;
                         const entry = payload[0]?.payload;

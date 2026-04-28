@@ -39,3 +39,11 @@ next-env.d.ts
 
 # deploy script (contains Vercel token)
 deploy.sh
+
+# Claude Code local settings (developer-machine paths & permissions)
+.claude/settings.local.json
+.claude/launch.json
+
+# 分析用Excel/JSONファイル（リポジトリには含めない）
+*.xlsx
+rakuten_access_data.json

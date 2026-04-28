@@ -26,7 +26,10 @@ export interface MetaInsight {
   cpc: string;
   ctr: string;
   cpm: string;
+  /** action_type ごとの件数 */
   actions?: Array<{ action_type: string; value: string }>;
+  /** action_type ごとの合計金額（コンバージョン金額。purchaseの売上はここにある） */
+  action_values?: Array<{ action_type: string; value: string }>;
 }
 
 /**
@@ -37,7 +40,7 @@ export interface MetaInsight {
 export async function fetchInsights(dateFrom: string, dateTo: string): Promise<MetaInsight[]> {
   const { accountId, accessToken } = getConfig();
 
-  const fields = "campaign_name,impressions,clicks,spend,cpc,ctr,cpm,actions";
+  const fields = "campaign_name,impressions,clicks,spend,cpc,ctr,cpm,actions,action_values";
   const params = new URLSearchParams({
     access_token: accessToken,
     fields,

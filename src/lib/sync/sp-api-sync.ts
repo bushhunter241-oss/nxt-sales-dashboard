@@ -13,6 +13,8 @@ interface SyncResult {
     inventoryFromApi?: number;
     autoCreatedProducts?: number;
     matchedOrders?: number;
+    pendingOrders?: number;
+    pendingAmount?: number;
     unmatchedAsins?: string[];
   };
 }
@@ -82,15 +84,27 @@ export async function syncOrders(
   // 3. Fetch order items for each order and aggregate by product+date
   const aggregateMap = new Map<string, DailySalesAggregate>();
   const unmatchedAsins = new Set<string>();
-  const feeUpdatedAsins = new Set<string>(); // Track ASINs whose fees have been estimated
+  const feeUpdatedAsins = new Set<string>();
   let matchedOrders = 0;
+  let pendingCount = 0;
+  let pendingAmount = 0;
 
   for (const order of orders) {
     const isCancelled = order.OrderStatus === "Canceled";
+    const isPending = order.OrderStatus === "Pending";
 
     // Convert PurchaseDate to JST for bucketing
     const purchaseDateJST = new Date(new Date(order.PurchaseDate).getTime() + 9 * 60 * 60 * 1000);
     const date = purchaseDateJST.toISOString().split("T")[0];
+
+    // Pending注文はOrderItemsが取得できない（SP-API制限）
+    // 支払い確認後に Unshipped/Shipped に変わるので次回syncで取得される
+    if (isPending) {
+      pendingCount++;
+      const orderTotal = order.OrderTotal ? Math.round(parseFloat(order.OrderTotal.Amount)) : 0;
+      pendingAmount += orderTotal;
+      continue;
+    }
 
     try {
       const items = await getOrderItems(order.AmazonOrderId);
@@ -241,6 +255,8 @@ export async function syncOrders(
       ordersFromApi: orders.length,
       autoCreatedProducts,
       matchedOrders,
+      pendingOrders: pendingCount,
+      pendingAmount,
       unmatchedAsins: Array.from(unmatchedAsins),
     },
   };

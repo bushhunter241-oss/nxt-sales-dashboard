@@ -26,7 +26,7 @@ async function getRakutenAdData(params: { startDate?: string; endDate?: string }
 }
 
 export default function RakutenRppPage() {
-  const [period, setPeriod] = useState("30days");
+  const [period, setPeriod] = useState("this_month");
   const dateRange = getDateRange(period);
 
   const { data: adData = [] } = useQuery({

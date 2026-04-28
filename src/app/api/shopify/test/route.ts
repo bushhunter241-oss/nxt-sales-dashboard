@@ -2,6 +2,10 @@ import { NextResponse } from "next/server";
 import { testConnection } from "@/lib/shopify/client";
 
 export async function GET() {
-  const result = await testConnection();
-  return NextResponse.json(result);
+  try {
+    const result = await testConnection();
+    return NextResponse.json(result);
+  } catch (error) {
+    return NextResponse.json({ success: false, error: error instanceof Error ? error.message : "Unknown error" });
+  }
 }

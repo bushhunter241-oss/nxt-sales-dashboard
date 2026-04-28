@@ -19,6 +19,7 @@ import { Product, RakutenProduct } from "@/types/database";
 // ─── Empty forms ───
 const emptyAmz = { name: "", code: "", asin: "", sku: "", parent_asin: "", product_group: "", selling_price: 0, cost_price: 0, fba_fee_rate: 15, fba_shipping_fee: 0, point_rate: 0, category: "", is_archived: false };
 const emptyRkt = { name: "", product_id: "", sku: "", product_group: "", parent_product_id: "", selling_price: 0, cost_price: 0, fee_rate: 10, shipping_fee: 0, category: "", is_archived: false };
+const emptyShopify = { name: "", code: "", sku: "", product_group: "feela", selling_price: 0, cost_price: 0, commission_rate: 3.55, shopify_shipping_fee: 0, category: "", is_archived: false };
 
 // ─── Group selector component ───
 function GroupSelector({ value, onChange, groups, newGroupMode, setNewGroupMode, newGroupName, setNewGroupName, onAddGroup }: {
@@ -51,7 +52,10 @@ function GroupSelector({ value, onChange, groups, newGroupMode, setNewGroupMode,
 }
 
 export default function ProductsSettingsPage() {
-  const [tab, setTab] = useState<"amazon" | "rakuten">("amazon");
+  const [tab, setTab] = useState<"amazon" | "rakuten" | "shopify">("amazon");
+  const [shopifyForm, setShopifyForm] = useState(emptyShopify);
+  const [shopifyEditing, setShopifyEditing] = useState<Product | null>(null);
+  const [shopifyDialog, setShopifyDialog] = useState(false);
   const [groupDialogOpen, setGroupDialogOpen] = useState(false);
   const [newGroupInput, setNewGroupInput] = useState("");
   const queryClient = useQueryClient();
@@ -242,6 +246,7 @@ export default function ProductsSettingsPage() {
       <div className="flex rounded-lg border border-[hsl(var(--border))] overflow-hidden mb-4 w-fit">
         <button onClick={() => setTab("amazon")} className={`px-4 py-2 text-sm font-medium transition-colors ${tab === "amazon" ? "bg-orange-500/20 text-orange-400" : "text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]"}`}>🟠 Amazon</button>
         <button onClick={() => setTab("rakuten")} className={`px-4 py-2 text-sm font-medium transition-colors ${tab === "rakuten" ? "bg-red-500/20 text-red-400" : "text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]"}`}>🔴 楽天</button>
+        <button onClick={() => setTab("shopify")} className={`px-4 py-2 text-sm font-medium transition-colors ${tab === "shopify" ? "bg-green-500/20 text-green-400" : "text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]"}`}>🟢 Shopify</button>
       </div>
 
       {syncResult && tab === "amazon" && (
@@ -442,6 +447,103 @@ export default function ProductsSettingsPage() {
                 <div><label className="text-sm text-[hsl(var(--muted-foreground))]">送料（円/個）</label><Input type="number" value={rktForm.shipping_fee} onChange={e => setRktForm({ ...rktForm, shipping_fee: Number(e.target.value) })} /></div>
               </div>
               <div className="flex justify-end gap-2"><Button type="button" variant="outline" onClick={() => setRktDialog(false)}>キャンセル</Button><Button type="submit">{rktEditing ? "更新" : "追加"}</Button></div>
+            </form>
+          </Dialog>
+        </>
+      )}
+
+      {/* ═══ Shopify Tab ═══ */}
+      {tab === "shopify" && (
+        <>
+          <Card className="mb-4">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <p className="text-sm text-[hsl(var(--muted-foreground))]">Shopify (feela.co.jp) の商品。SKUはShopify管理画面と一致させてください。</p>
+                <Button size="sm" onClick={() => { setShopifyEditing(null); setShopifyForm(emptyShopify); setShopifyDialog(true); }}><Plus className="h-3 w-3 mr-1" /> 商品追加</Button>
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-0">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>商品名</TableHead>
+                    <TableHead>SKU</TableHead>
+                    <TableHead className="text-right">販売価格</TableHead>
+                    <TableHead className="text-right">原価</TableHead>
+                    <TableHead className="text-right">手数料率</TableHead>
+                    <TableHead className="text-right">配送コスト</TableHead>
+                    <TableHead>状態</TableHead>
+                    <TableHead></TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {(amazonProducts as Product[]).filter(p => (p.commission_rate || 0) > 0).map(p => (
+                    <TableRow key={p.id}>
+                      <TableCell className="font-medium">{p.name}</TableCell>
+                      <TableCell className="text-sm">{p.sku || p.code}</TableCell>
+                      <TableCell className="text-right">{formatCurrency(p.selling_price)}</TableCell>
+                      <TableCell className="text-right">{p.cost_price > 0 ? formatCurrency(p.cost_price) : <span className="text-xs text-red-400">⚠ 未設定</span>}</TableCell>
+                      <TableCell className="text-right">{p.commission_rate || 0}%</TableCell>
+                      <TableCell className="text-right">{(p.shopify_shipping_fee || p.fba_shipping_fee || 0) > 0 ? formatCurrency(p.shopify_shipping_fee || p.fba_shipping_fee || 0) : "-"}</TableCell>
+                      <TableCell>{p.is_archived ? <Badge variant="secondary">アーカイブ</Badge> : <Badge variant="success">有効</Badge>}</TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex gap-1 justify-end">
+                          <Button variant="ghost" size="sm" onClick={() => {
+                            setShopifyEditing(p);
+                            setShopifyForm({ name: p.name, code: p.code, sku: p.sku || "", product_group: p.product_group || "feela", selling_price: p.selling_price, cost_price: p.cost_price, commission_rate: p.commission_rate || 3.55, shopify_shipping_fee: p.shopify_shipping_fee || p.fba_shipping_fee || 0, category: "", is_archived: p.is_archived });
+                            setShopifyDialog(true);
+                          }}><Pencil className="h-3 w-3" /></Button>
+                          <Button variant="ghost" size="sm" onClick={() => updateProduct(p.id, { is_archived: !p.is_archived }).then(() => queryClient.invalidateQueries({ queryKey: ["products"] }))}><Archive className="h-3 w-3" /></Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                  {(amazonProducts as Product[]).filter(p => (p.commission_rate || 0) > 0).length === 0 && (
+                    <TableRow><TableCell colSpan={8} className="text-center py-8 text-[hsl(var(--muted-foreground))]">Shopify商品が登録されていません。「商品追加」から登録してください。</TableCell></TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+          <Dialog open={shopifyDialog} onOpenChange={setShopifyDialog}>
+            <DialogHeader><DialogTitle>{shopifyEditing ? "Shopify商品を編集" : "Shopify商品を追加"}</DialogTitle></DialogHeader>
+            <form onSubmit={(e) => {
+              e.preventDefault();
+              const data = {
+                name: shopifyForm.name,
+                code: shopifyForm.sku || crypto.randomUUID().slice(0, 8),
+                sku: shopifyForm.sku || null,
+                asin: null,
+                parent_asin: null,
+                product_group: shopifyForm.product_group || "feela",
+                selling_price: shopifyForm.selling_price,
+                cost_price: shopifyForm.cost_price,
+                fba_fee_rate: 0,
+                shopify_shipping_fee: shopifyForm.shopify_shipping_fee,
+                commission_rate: shopifyForm.commission_rate,
+                category: null,
+                is_archived: shopifyForm.is_archived,
+              };
+              if (shopifyEditing) {
+                updateProduct(shopifyEditing.id, data).then(() => { queryClient.invalidateQueries({ queryKey: ["products"] }); setShopifyDialog(false); });
+              } else {
+                createProduct(data as any).then(() => { queryClient.invalidateQueries({ queryKey: ["products"] }); setShopifyDialog(false); });
+              }
+            }} className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div><label className="text-sm text-[hsl(var(--muted-foreground))]">商品名</label><Input value={shopifyForm.name} onChange={e => setShopifyForm({ ...shopifyForm, name: e.target.value })} required /></div>
+                <div><label className="text-sm text-[hsl(var(--muted-foreground))]">SKU（Shopifyと一致）</label><Input value={shopifyForm.sku} onChange={e => setShopifyForm({ ...shopifyForm, sku: e.target.value })} required /></div>
+                <div><label className="text-sm text-[hsl(var(--muted-foreground))]">販売価格（円）</label><Input type="number" value={shopifyForm.selling_price} onChange={e => setShopifyForm({ ...shopifyForm, selling_price: Number(e.target.value) })} /></div>
+                <div><label className="text-sm text-[hsl(var(--muted-foreground))]">原価（円）</label><Input type="number" value={shopifyForm.cost_price} onChange={e => setShopifyForm({ ...shopifyForm, cost_price: Number(e.target.value) })} /></div>
+                <div><label className="text-sm text-[hsl(var(--muted-foreground))]">決済手数料率（%）</label><Input type="number" step="0.01" value={shopifyForm.commission_rate} onChange={e => setShopifyForm({ ...shopifyForm, commission_rate: Number(e.target.value) })} /></div>
+                <div><label className="text-sm text-[hsl(var(--muted-foreground))]">配送コスト（円/個）</label><Input type="number" value={shopifyForm.shopify_shipping_fee} onChange={e => setShopifyForm({ ...shopifyForm, shopify_shipping_fee: Number(e.target.value) })} /></div>
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button type="button" variant="outline" onClick={() => setShopifyDialog(false)}>キャンセル</Button>
+                <Button type="submit">{shopifyEditing ? "更新" : "追加"}</Button>
+              </div>
             </form>
           </Dialog>
         </>

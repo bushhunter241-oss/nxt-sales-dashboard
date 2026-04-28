@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { PageHeader } from "@/components/layout/page-header";
 import { PeriodFilter } from "@/components/layout/period-filter";
@@ -8,12 +8,22 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatCurrency, formatNumber, formatPercent, getDateRange } from "@/lib/utils";
 import { getMetaAdDaily, getMetaAdSummary } from "@/lib/api/shopify-sales";
-import { Megaphone, DollarSign, MousePointerClick, TrendingUp } from "lucide-react";
+import { Megaphone, DollarSign, MousePointerClick, TrendingUp, ShoppingCart } from "lucide-react";
 import { Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ComposedChart } from "recharts";
 import { CHART_COLORS } from "@/lib/constants";
 
+interface CampaignAgg {
+  name: string;
+  spend: number;
+  purchase_value: number;
+  purchases: number;
+  add_to_cart: number;
+  clicks: number;
+  impressions: number;
+}
+
 export default function MetaAdsPage() {
-  const [period, setPeriod] = useState("30days");
+  const [period, setPeriod] = useState("this_month");
   const dateRange = getDateRange(period);
 
   const { data: adData = [] } = useQuery({ queryKey: ["metaAdDaily", dateRange], queryFn: () => getMetaAdDaily(dateRange) });
@@ -24,43 +34,44 @@ export default function MetaAdsPage() {
   const totalPurchases = adSummary?.total_purchases || 0;
   const totalClicks = adSummary?.total_clicks || 0;
   const totalImpressions = adSummary?.total_impressions || 0;
+  const totalAddToCart = (adData as any[]).reduce((s: number, r: any) => s + (r.add_to_cart || 0), 0);
   const roas = totalSpend > 0 ? totalPurchaseValue / totalSpend : 0;
   const ctr = totalImpressions > 0 ? (totalClicks / totalImpressions) * 100 : 0;
   const cpc = totalClicks > 0 ? totalSpend / totalClicks : 0;
 
-  // 日別集計
-  const dailyAgg = (adData as any[]).reduce((acc: Record<string, any>, row: any) => {
-    const d = row.date;
-    if (!acc[d]) acc[d] = { date: d, spend: 0, purchase_value: 0, clicks: 0, impressions: 0 };
-    acc[d].spend += row.spend || 0;
-    acc[d].purchase_value += row.purchase_value || 0;
-    acc[d].clicks += row.clicks || 0;
-    acc[d].impressions += row.impressions || 0;
-    return acc;
-  }, {});
-
-  const chartData = Object.values(dailyAgg)
-    .sort((a: any, b: any) => a.date.localeCompare(b.date))
-    .map((d: any) => ({
-      date: d.date.slice(5),
-      広告費: d.spend,
-      売上: d.purchase_value,
-      ROAS: d.spend > 0 ? ((d.purchase_value / d.spend) * 100).toFixed(0) : 0,
+  // 日別チャート
+  const chartData = useMemo(() => {
+    const byDate: Record<string, { spend: number; purchase_value: number }> = {};
+    for (const r of adData as any[]) {
+      if (!byDate[r.date]) byDate[r.date] = { spend: 0, purchase_value: 0 };
+      byDate[r.date].spend += r.spend || 0;
+      byDate[r.date].purchase_value += r.purchase_value || 0;
+    }
+    return Object.entries(byDate).sort(([a], [b]) => a.localeCompare(b)).map(([d, v]) => ({
+      date: d.slice(5), 広告費: v.spend, 売上: v.purchase_value,
+      ROAS: v.spend > 0 ? ((v.purchase_value / v.spend) * 100).toFixed(0) : 0,
     }));
+  }, [adData]);
 
-  // キャンペーン別集計
-  const campaignAgg = (adData as any[]).reduce((acc: Record<string, any>, row: any) => {
-    const key = row.campaign_name || "不明";
-    if (!acc[key]) acc[key] = { name: key, spend: 0, purchase_value: 0, purchases: 0, clicks: 0, impressions: 0 };
-    acc[key].spend += row.spend || 0;
-    acc[key].purchase_value += row.purchase_value || 0;
-    acc[key].purchases += row.purchases || 0;
-    acc[key].clicks += row.clicks || 0;
-    acc[key].impressions += row.impressions || 0;
-    return acc;
-  }, {});
-
-  const campaigns = Object.values(campaignAgg).sort((a: any, b: any) => b.spend - a.spend);
+  // キャンペーン単位の集計
+  // （現在の同期は level: "campaign" のみのため、ad_set/ad は同期されていない。
+  //  階層UIは混乱を招くので、キャンペーン単位のフラット表示にしてある。）
+  const campaignList = useMemo<CampaignAgg[]>(() => {
+    const campaigns: Record<string, CampaignAgg> = {};
+    for (const r of adData as any[]) {
+      const name = r.campaign_name || "不明";
+      if (!campaigns[name]) {
+        campaigns[name] = { name, spend: 0, purchase_value: 0, purchases: 0, add_to_cart: 0, clicks: 0, impressions: 0 };
+      }
+      campaigns[name].spend += r.spend || 0;
+      campaigns[name].purchase_value += r.purchase_value || 0;
+      campaigns[name].purchases += r.purchases || 0;
+      campaigns[name].add_to_cart += r.add_to_cart || 0;
+      campaigns[name].clicks += r.clicks || 0;
+      campaigns[name].impressions += r.impressions || 0;
+    }
+    return Object.values(campaigns).sort((a, b) => b.spend - a.spend);
+  }, [adData]);
 
   return (
     <div>
@@ -68,11 +79,12 @@ export default function MetaAdsPage() {
         <PeriodFilter value={period} onChange={setPeriod} />
       </PageHeader>
 
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-6">
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-7">
         <KPICard title="広告費合計" value={formatCurrency(totalSpend)} icon={Megaphone} />
         <KPICard title="広告売上" value={formatCurrency(totalPurchaseValue)} icon={DollarSign} />
         <KPICard title="ROAS" value={`${(roas * 100).toFixed(0)}%`} icon={TrendingUp} valueClassName={roas > 3 ? "text-green-400" : ""} />
         <KPICard title="購入数" value={formatNumber(totalPurchases)} icon={DollarSign} />
+        <KPICard title="カート追加" value={formatNumber(totalAddToCart)} icon={ShoppingCart} />
         <KPICard title="CPC" value={`¥${Math.round(cpc)}`} icon={MousePointerClick} />
         <KPICard title="CTR" value={formatPercent(ctr)} icon={MousePointerClick} />
       </div>
@@ -107,23 +119,25 @@ export default function MetaAdsPage() {
                 <TableHead className="text-right">売上</TableHead>
                 <TableHead className="text-right">ROAS</TableHead>
                 <TableHead className="text-right">購入数</TableHead>
+                <TableHead className="text-right">カート追加</TableHead>
                 <TableHead className="text-right">クリック</TableHead>
                 <TableHead className="text-right">CTR</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {campaigns.map((c: any, i: number) => {
-                const cRoas = c.spend > 0 ? c.purchase_value / c.spend : 0;
-                const cCtr = c.impressions > 0 ? (c.clicks / c.impressions) * 100 : 0;
+              {campaignList.map((c, ci) => {
+                const r = c.spend > 0 ? c.purchase_value / c.spend : 0;
+                const ctrVal = c.impressions > 0 ? (c.clicks / c.impressions) * 100 : 0;
                 return (
-                  <TableRow key={i}>
+                  <TableRow key={ci}>
                     <TableCell className="font-medium">{c.name}</TableCell>
                     <TableCell className="text-right">{formatCurrency(c.spend)}</TableCell>
                     <TableCell className="text-right text-[hsl(var(--primary))]">{formatCurrency(c.purchase_value)}</TableCell>
-                    <TableCell className={`text-right ${cRoas > 3 ? "text-green-500" : ""}`}>{(cRoas * 100).toFixed(0)}%</TableCell>
+                    <TableCell className={`text-right ${r > 3 ? "text-green-500" : ""}`}>{(r * 100).toFixed(0)}%</TableCell>
                     <TableCell className="text-right">{formatNumber(c.purchases)}</TableCell>
+                    <TableCell className="text-right">{formatNumber(c.add_to_cart)}</TableCell>
                     <TableCell className="text-right">{formatNumber(c.clicks)}</TableCell>
-                    <TableCell className="text-right">{formatPercent(cCtr)}</TableCell>
+                    <TableCell className="text-right">{formatPercent(ctrVal)}</TableCell>
                   </TableRow>
                 );
               })}

@@ -4,6 +4,12 @@ import { syncMetaAds } from "@/lib/meta/sync";
 
 export const maxDuration = 60;
 
+// 注: このエンドポイントはアプリ内認証を行っていない。
+// Vercel Deployment Protection で外部アクセスを遮断する前提で運用している。
+// 将来的には Server Actions 化して内部で CRON_SECRET を付与する形にする
+// （CLAUDE.md の TODO 参照）。同等パターンは /api/sync/sp-api, /api/sync/ads-api,
+// /api/rakuten/sync にも適用されている。
+
 /** GET: Debug - fetch raw insights and compare with DB */
 export async function GET(request: NextRequest) {
   try {

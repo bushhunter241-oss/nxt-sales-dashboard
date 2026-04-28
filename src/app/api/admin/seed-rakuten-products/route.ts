@@ -83,36 +83,49 @@ const RAKUTEN_PRODUCTS = [
   },
 ];
 
-// SKU別原価テーブル
+// SKU別原価テーブル（実際のRMS注文データのSKU IDに準拠）
 const RAKUTEN_SKU_COSTS = [
-  // imin01
-  { manage_number: "imin01", sku_id: "imin01:sage-30g", sku_label: "ホワイトセージ 30g", cost_price: 303, shipping_fee: 251 },
-  { manage_number: "imin01", sku_id: "imin01:sage-50g", sku_label: "ホワイトセージ 50g", cost_price: 441, shipping_fee: 251 },
-  { manage_number: "imin01", sku_id: "imin01:sage-100g", sku_label: "ホワイトセージ 100g", cost_price: 784, shipping_fee: 251 },
-  { manage_number: "imin01", sku_id: "imin01:hakkaku-gold", sku_label: "八角浄化皿 GOLD", cost_price: 474, shipping_fee: 251 },
-  { manage_number: "imin01", sku_id: "imin01:hakkaku-water", sku_label: "八角浄化皿 WATER", cost_price: 455, shipping_fee: 527 },
-  { manage_number: "imin01", sku_id: "imin01:kiyome-10g", sku_label: "浄め塩 10g", cost_price: 79, shipping_fee: 251 },
-  { manage_number: "imin01", sku_id: "imin01:limited-set", sku_label: "限定セット", cost_price: 699, shipping_fee: 251 },
-  { manage_number: "imin01", sku_id: "imin01:crush", sku_label: "クラッシュ", cost_price: 1008, shipping_fee: 251 },
-  // imin02
-  { manage_number: "imin02", sku_id: "imin02:moon-can", sku_label: "Moon缶", cost_price: 499, shipping_fee: 527 },
-  { manage_number: "imin02", sku_id: "imin02:moon100", sku_label: "Moon100", cost_price: 950, shipping_fee: 527 },
-  { manage_number: "imin02", sku_id: "imin02:18g", sku_label: "18g", cost_price: 172, shipping_fee: 251 },
-  { manage_number: "imin02", sku_id: "imin02:35g", sku_label: "35g", cost_price: 316, shipping_fee: 251 },
-  // imin03
-  { manage_number: "imin03", sku_id: "imin03:joka-28mm-33", sku_label: "浄化香 2.8mm 33本", cost_price: 256, shipping_fee: 251 },
-  { manage_number: "imin03", sku_id: "imin03:joka-21mm-40", sku_label: "浄化香 2.1mm 40本", cost_price: 278, shipping_fee: 251 },
-  { manage_number: "imin03", sku_id: "imin03:joka-80", sku_label: "浄化香 80本", cost_price: 338, shipping_fee: 251 },
-  { manage_number: "imin03", sku_id: "imin03:joka-120", sku_label: "浄化香 120本", cost_price: 432, shipping_fee: 251 },
-  { manage_number: "imin03", sku_id: "imin03:koudai-mi", sku_label: "香立 巳", cost_price: 372, shipping_fee: 251 },
-  { manage_number: "imin03", sku_id: "imin03:lighter", sku_label: "ライター", cost_price: 480, shipping_fee: 251 },
-  // imin05
-  { manage_number: "imin05", sku_id: "imin05:p-set", sku_label: "P-set", cost_price: 514, shipping_fee: 251 },
-  { manage_number: "imin05", sku_id: "imin05:powder", sku_label: "パウダー", cost_price: 283, shipping_fee: 251 },
-  { manage_number: "imin05", sku_id: "imin05:seasonal", sku_label: "季節ブレンド", cost_price: 283, shipping_fee: 251 },
-  { manage_number: "imin05", sku_id: "imin05:gold", sku_label: "Gold", cost_price: 412, shipping_fee: 251 },
   // feela01
-  { manage_number: "feela01", sku_id: "feela01:seat-cushion", sku_label: "シートクッション", cost_price: 3100, shipping_fee: 704 },
+  { manage_number: "feela01", sku_id: "feela01h", sku_label: "feela ハーフ", cost_price: 3100, shipping_fee: 704 },
+  { manage_number: "feela01", sku_id: "feela01m", sku_label: "feela ミドル", cost_price: 3100, shipping_fee: 704 },
+  { manage_number: "feela01", sku_id: "feela01s", sku_label: "feela スモール", cost_price: 3100, shipping_fee: 704 },
+  // imin01
+  { manage_number: "imin01", sku_id: "sage30", sku_label: "ホワイトセージ 30g", cost_price: 303, shipping_fee: 251 },
+  { manage_number: "imin01", sku_id: "sage50", sku_label: "ホワイトセージ 50g", cost_price: 441, shipping_fee: 251 },
+  { manage_number: "imin01", sku_id: "sage100", sku_label: "ホワイトセージ 100g", cost_price: 784, shipping_fee: 251 },
+  { manage_number: "imin01", sku_id: "sage150", sku_label: "ホワイトセージ 150g", cost_price: 1008, shipping_fee: 251 },
+  { manage_number: "imin01", sku_id: "sage8Gold", sku_label: "八角浄化皿 GOLD", cost_price: 474, shipping_fee: 251 },
+  { manage_number: "imin01", sku_id: "sage8Water", sku_label: "八角浄化皿 WATER", cost_price: 455, shipping_fee: 527 },
+  { manage_number: "imin01", sku_id: "sage8Season", sku_label: "限定セット", cost_price: 699, shipping_fee: 251 },
+  { manage_number: "imin01", sku_id: "sageWS", sku_label: "浄め塩 ホワイトセージ10g", cost_price: 79, shipping_fee: 251 },
+  // imin02
+  { manage_number: "imin02", sku_id: "moon_k", sku_label: "Moon缶", cost_price: 499, shipping_fee: 527 },
+  { manage_number: "imin02", sku_id: "moon_100", sku_label: "Moon100", cost_price: 950, shipping_fee: 527 },
+  { manage_number: "imin02", sku_id: "moon_18", sku_label: "18g", cost_price: 172, shipping_fee: 251 },
+  { manage_number: "imin02", sku_id: "moon_35", sku_label: "35g", cost_price: 316, shipping_fee: 251 },
+  // imin03
+  { manage_number: "imin03", sku_id: "40h", sku_label: "浄化香 40本", cost_price: 278, shipping_fee: 251 },
+  { manage_number: "imin03", sku_id: "40h_Gold", sku_label: "浄化香 40本+八角GOLD", cost_price: 752, shipping_fee: 251 },
+  { manage_number: "imin03", sku_id: "40h_Uma", sku_label: "浄化香 40本+香立巳", cost_price: 650, shipping_fee: 251 },
+  { manage_number: "imin03", sku_id: "40h_Uma_Gold", sku_label: "浄化香 40本+香立巳+八角GOLD", cost_price: 1124, shipping_fee: 251 },
+  { manage_number: "imin03", sku_id: "80h", sku_label: "浄化香 80本", cost_price: 338, shipping_fee: 251 },
+  { manage_number: "imin03", sku_id: "80h_Uma", sku_label: "浄化香 80本+香立巳", cost_price: 710, shipping_fee: 251 },
+  { manage_number: "imin03", sku_id: "80h_Uma_Gold", sku_label: "浄化香 80本+香立巳+八角GOLD", cost_price: 1184, shipping_fee: 251 },
+  { manage_number: "imin03", sku_id: "120h", sku_label: "浄化香 120本", cost_price: 432, shipping_fee: 251 },
+  { manage_number: "imin03", sku_id: "120h_Uma_Gold", sku_label: "浄化香 120本+香立巳+八角GOLD", cost_price: 1278, shipping_fee: 251 },
+  // imin05
+  { manage_number: "imin05", sku_id: "WS_powder", sku_label: "パウダー", cost_price: 283, shipping_fee: 251 },
+  { manage_number: "imin05", sku_id: "WS_powder_G", sku_label: "パウダー+八角GOLD", cost_price: 757, shipping_fee: 251 },
+  { manage_number: "imin05", sku_id: "powder_2set", sku_label: "P-set", cost_price: 514, shipping_fee: 251 },
+  { manage_number: "imin05", sku_id: "powder_2set_G", sku_label: "P-set+八角GOLD", cost_price: 988, shipping_fee: 251 },
+  { manage_number: "imin05", sku_id: "season_powder", sku_label: "季節ブレンド", cost_price: 283, shipping_fee: 251 },
+  { manage_number: "imin05", sku_id: "season_powder_G", sku_label: "季節ブレンド+八角GOLD", cost_price: 757, shipping_fee: 251 },
+  // imin06
+  { manage_number: "imin06", sku_id: "lighter_white", sku_label: "ライター", cost_price: 480, shipping_fee: 251 },
+  // nsnggl (RHINON)
+  { manage_number: "nsnggl", sku_id: "normal-inventory", sku_label: "RHINON", cost_price: 821, shipping_fee: 251 },
+  // rms01
+  { manage_number: "rms01", sku_id: "rms0101", sku_label: "RMS01", cost_price: 0, shipping_fee: 0 },
 ];
 
 export async function POST() {

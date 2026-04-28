@@ -136,7 +136,7 @@ export async function getOrders(
         MarketplaceIds: AMAZON_CONFIG.MARKETPLACE_ID,
         CreatedAfter: createdAfter.toISOString(),
         CreatedBefore: createdBefore.toISOString(),
-        OrderStatuses: "Shipped,Unshipped,PartiallyShipped",
+        OrderStatuses: "Shipped,Unshipped,PartiallyShipped,Pending",
       };
     }
 

@@ -54,7 +54,7 @@ export async function getMetaAdByDate(params: { startDate?: string; endDate?: st
 /** Shopify売上を日別×商品で集計（原価計算用）
  *  product_idでJOINできない行はSKUで手動マッチする */
 export async function getShopifyDailySalesWithCost(params: { startDate?: string; endDate?: string }) {
-  let query = supabase.from("shopify_daily_sales").select("date, quantity, net_sales, sku, product_id, product:products(cost_price, commission_rate, fba_shipping_fee, sku)").order("date", { ascending: true });
+  let query = supabase.from("shopify_daily_sales").select("date, quantity, net_sales, sku, product_id, product:products(cost_price, commission_rate, shopify_shipping_fee, fba_shipping_fee, sku)").order("date", { ascending: true });
   if (params.startDate) query = query.gte("date", params.startDate);
   if (params.endDate) query = query.lte("date", params.endDate);
   const { data, error } = await query;
@@ -64,7 +64,7 @@ export async function getShopifyDailySalesWithCost(params: { startDate?: string;
   const rows = data || [];
   const unmatched = rows.filter((r: any) => !r.product && r.sku);
   if (unmatched.length > 0) {
-    const { data: allProducts } = await supabase.from("products").select("cost_price, commission_rate, fba_shipping_fee, sku, code").eq("is_archived", false);
+    const { data: allProducts } = await supabase.from("products").select("cost_price, commission_rate, shopify_shipping_fee, fba_shipping_fee, sku, code").eq("is_archived", false);
     const skuMap = new Map<string, any>();
     for (const p of allProducts || []) {
       if (p.sku) skuMap.set(p.sku, p);

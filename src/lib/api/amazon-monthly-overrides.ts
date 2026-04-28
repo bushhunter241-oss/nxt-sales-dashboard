@@ -130,11 +130,17 @@ export function parseMonthlyAdSummaryCsv(csvText: string): MonthlyAdOverride[] {
   const idx = {
     date: cols.findIndex(c => c.includes("日付") || c.includes("開始日") || c.includes("Date") || c.includes("Start")),
     spend: cols.findIndex(c => c.includes("広告費") || c.includes("費用") || c.includes("Spend")),
-    sales: cols.findIndex(c => c.includes("売上") || c.includes("Sales")),
+    // 「総売上高」「7日間の総売上」を優先。「広告費売上高比率（ACOS）」にマッチしないよう除外
+    sales: cols.findIndex(c => (c.includes("総売上") || (c.includes("Sales") && !c.includes("ACOS"))) && !c.includes("比率")),
     orders: cols.findIndex(c => c.includes("注文") || c.includes("Orders")),
     impressions: cols.findIndex(c => c.includes("インプレッション") || c.includes("Impressions")),
     clicks: cols.findIndex(c => c.includes("クリック") || c.includes("Clicks")),
   };
+
+  // salesが見つからない場合、フォールバック（「売上」を含む列のうちACOS/比率を除外）
+  if (idx.sales === -1) {
+    idx.sales = cols.findIndex(c => c.includes("売上") && !c.includes("比率") && !c.includes("ACOS") && !c.includes("広告費"));
+  }
 
   // 月別に集計するためのマップ
   const monthMap: Record<string, MonthlyAdOverride> = {};

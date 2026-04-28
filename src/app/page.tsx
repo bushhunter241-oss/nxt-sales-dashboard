@@ -89,7 +89,7 @@ export default function DashboardPage() {
   const shopifyAdSpend = metaAdSummary?.total_spend || 0;
   const shopifyCost = (shopifyCostData as any[]).reduce((s: number, r: any) => s + ((r.product?.cost_price || 0) * (r.quantity || 0)), 0);
   const shopifyCommission = (shopifyCostData as any[]).reduce((s: number, r: any) => s + Math.round((r.net_sales || 0) * ((r.product?.commission_rate || 3.55) / 100)), 0);
-  const shopifyShipping = (shopifyCostData as any[]).reduce((s: number, r: any) => s + ((r.product?.fba_shipping_fee || 0) * (r.quantity || 0)), 0);
+  const shopifyShipping = (shopifyCostData as any[]).reduce((s: number, r: any) => s + ((r.product?.shopify_shipping_fee || r.product?.fba_shipping_fee || 0) * (r.quantity || 0)), 0);
   const shopifyProfit = shopifySales - shopifyCost - shopifyCommission - shopifyShipping - shopifyAdSpend;
 
   const totalSales = amazonSales + rktSales + shopifySales;
@@ -104,7 +104,7 @@ export default function DashboardPage() {
   const lmShopifyAdSpend = metaAdSummaryLM?.total_spend || 0;
   const lmShopifyCost = (shopifyCostDataLM as any[]).reduce((s: number, r: any) => s + ((r.product?.cost_price || 0) * (r.quantity || 0)), 0);
   const lmShopifyCommission = (shopifyCostDataLM as any[]).reduce((s: number, r: any) => s + Math.round((r.net_sales || 0) * ((r.product?.commission_rate || 3.55) / 100)), 0);
-  const lmShopifyShipping = (shopifyCostDataLM as any[]).reduce((s: number, r: any) => s + ((r.product?.fba_shipping_fee || 0) * (r.quantity || 0)), 0);
+  const lmShopifyShipping = (shopifyCostDataLM as any[]).reduce((s: number, r: any) => s + ((r.product?.shopify_shipping_fee || r.product?.fba_shipping_fee || 0) * (r.quantity || 0)), 0);
   const lmSales = (lastMonthDailySales as any[]).reduce((s: number, d: any) => s + d.sales_amount, 0) + (lastMonthRakutenDailySales as any[]).reduce((s: number, d: any) => s + d.sales_amount, 0) + lmShopifySales;
   const lmOrders = (lastMonthDailySales as any[]).reduce((s: number, d: any) => s + d.orders, 0) + (lastMonthRakutenDailySales as any[]).reduce((s: number, d: any) => s + d.orders, 0) + lmShopifyOrders;
   const lmAmazonAdSpend = campaignAdSummaryLM?.total_ad_spend || lastMonthAdSummary?.total_ad_spend || 0;
@@ -230,30 +230,38 @@ export default function DashboardPage() {
   }, [productSummary, rakutenProductSummary, shopifySales, shopifyOrders, shopifyAdSpend, shopifyProfit, campaignAdByGroup]);
 
   // ── 目標ゲージ ──
+  const [expandedGoalGroups, setExpandedGoalGroups] = useState<Set<string>>(new Set());
+  const toggleGoalGroup = (name: string) => setExpandedGoalGroups(prev => { const n = new Set(prev); n.has(name) ? n.delete(name) : n.add(name); return n; });
+
   const goalGaugeData = useMemo(() => {
     const goals = monthlyGoals as any[];
 
-    // グループ別の今月売上を計算
-    const thisMonthGroupSales: Record<string, number> = {};
+    // グループ別・チャネル別の今月売上を計算
+    const channelSales: Record<string, { amazon: number; rakuten: number; shopify: number; total: number }> = {};
+    const ensureSales = (g: string) => { if (!channelSales[g]) channelSales[g] = { amazon: 0, rakuten: 0, shopify: 0, total: 0 }; };
+
     for (const p of productSummary as any[]) {
-      const g = normalizeGroup(p.product?.product_group || "その他");
-      thisMonthGroupSales[g] = (thisMonthGroupSales[g] || 0) + (p.total_sales || 0);
+      const g = normalizeGroup(p.product?.product_group || "その他"); ensureSales(g);
+      channelSales[g].amazon += p.total_sales || 0;
+      channelSales[g].total += p.total_sales || 0;
     }
     for (const p of rakutenProductSummary as any[]) {
-      const g = normalizeGroup(p.product?.product_group || "その他");
-      thisMonthGroupSales[g] = (thisMonthGroupSales[g] || 0) + (p.total_sales || 0);
+      const g = normalizeGroup(p.product?.product_group || "その他"); ensureSales(g);
+      channelSales[g].rakuten += p.total_sales || 0;
+      channelSales[g].total += p.total_sales || 0;
     }
-    // Shopify売上をfeelaに加算
     if (shopifySales > 0) {
-      thisMonthGroupSales["feela"] = (thisMonthGroupSales["feela"] || 0) + shopifySales;
+      ensureSales("feela");
+      channelSales["feela"].shopify += shopifySales;
+      channelSales["feela"].total += shopifySales;
     }
 
     const dayOfMonth = now.getDate();
     const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
 
-    // グループごとにtotal目標を算出（channel=total優先、なければチャネル別合計）
+    // グループごとの目標（total + チャネル別）
     const groupGoalMap: Record<string, number> = {};
-    const channelGoals: Record<string, Record<string, number>> = {};
+    const channelGoalMap: Record<string, Record<string, number>> = {};
 
     for (const g of goals.filter((g: any) => g.product_group && !g.product_id)) {
       const pg = normalizeGroup(g.product_group);
@@ -261,13 +269,13 @@ export default function DashboardPage() {
       if (ch === "total") {
         groupGoalMap[pg] = (groupGoalMap[pg] || 0) + (g.target_sales || 0);
       } else {
-        if (!channelGoals[pg]) channelGoals[pg] = {};
-        channelGoals[pg][ch] = (channelGoals[pg][ch] || 0) + (g.target_sales || 0);
+        if (!channelGoalMap[pg]) channelGoalMap[pg] = {};
+        channelGoalMap[pg][ch] = (channelGoalMap[pg][ch] || 0) + (g.target_sales || 0);
       }
     }
 
     // total未設定のグループはチャネル別合計を使用
-    for (const [pg, channels] of Object.entries(channelGoals)) {
+    for (const [pg, channels] of Object.entries(channelGoalMap)) {
       if (!groupGoalMap[pg] || groupGoalMap[pg] === 0) {
         const sum = Object.values(channels).reduce((s, v) => s + v, 0);
         if (sum > 0) groupGoalMap[pg] = sum;
@@ -275,22 +283,39 @@ export default function DashboardPage() {
     }
 
     // 結果を生成
-    const result: Array<{ group: string; target: number; currentSales: number; projected: number; pct: number; hasGoal: boolean }> = [];
+    type ChannelDetail = { channel: string; sales: number; target: number; projected: number; pct: number; projPct: number };
+    const result: Array<{ group: string; target: number; currentSales: number; projected: number; pct: number; projPct: number; hasGoal: boolean; channels: ChannelDetail[] }> = [];
     const processedGroups = new Set<string>();
+
+    const calcProjected = (sales: number) => dayOfMonth > 0 ? Math.round(sales / dayOfMonth * daysInMonth) : 0;
 
     for (const [pg, target] of Object.entries(groupGoalMap)) {
       processedGroups.add(pg);
-      const currentSales = thisMonthGroupSales[pg] || 0;
-      const projected = dayOfMonth > 0 ? Math.round(currentSales / dayOfMonth * daysInMonth) : 0;
-      const pct = target > 0 ? (projected / target) * 100 : 0;
-      result.push({ group: pg, target, currentSales, projected, pct, hasGoal: true });
+      const sales = channelSales[pg] || { amazon: 0, rakuten: 0, shopify: 0, total: 0 };
+      const projected = calcProjected(sales.total);
+      const pct = target > 0 ? (sales.total / target) * 100 : 0;
+      const projPct = target > 0 ? (projected / target) * 100 : 0;
+      const chGoals = channelGoalMap[pg] || {};
+
+      // チャネル別詳細（売上があるかゴールがあるチャネルのみ）
+      const channels: ChannelDetail[] = [];
+      for (const ch of ["amazon", "rakuten", "shopify"] as const) {
+        const chSales = sales[ch];
+        const chTarget = chGoals[ch] || 0;
+        if (chSales > 0 || chTarget > 0) {
+          const chProj = calcProjected(chSales);
+          channels.push({ channel: ch, sales: chSales, target: chTarget, projected: chProj, pct: chTarget > 0 ? (chSales / chTarget) * 100 : 0, projPct: chTarget > 0 ? (chProj / chTarget) * 100 : 0 });
+        }
+      }
+
+      result.push({ group: pg, target, currentSales: sales.total, projected, pct, projPct, hasGoal: true, channels });
     }
 
-    // 売上があるが目標未設定のグループを追加（「その他」は除外）
-    for (const [group, sales] of Object.entries(thisMonthGroupSales)) {
-      if (!processedGroups.has(group) && sales > 0 && group !== "その他") {
-        const projected = dayOfMonth > 0 ? Math.round(sales / dayOfMonth * daysInMonth) : 0;
-        result.push({ group, target: 0, currentSales: sales, projected, pct: 0, hasGoal: false });
+    // 売上があるが目標未設定のグループを追加
+    for (const [group, sales] of Object.entries(channelSales)) {
+      if (!processedGroups.has(group) && sales.total > 0 && group !== "その他") {
+        const projected = calcProjected(sales.total);
+        result.push({ group, target: 0, currentSales: sales.total, projected, pct: 0, projPct: 0, hasGoal: false, channels: [] });
       }
     }
 
@@ -516,25 +541,35 @@ export default function DashboardPage() {
         </CardContent>
       </Card>
 
-      {/* 4. 目標 vs 着地予想ゲージ */}
+      {/* 4. 目標達成率 */}
       {goalGaugeData.length > 0 && (
         <Card className="mt-6">
           <CardHeader>
-            <CardTitle>目標 vs 着地予想</CardTitle>
+            <CardTitle>目標達成率</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
-              {goalGaugeData.map((g, i) => (
+              {goalGaugeData.map((g, i) => {
+                const expanded = expandedGoalGroups.has(g.group);
+                const chLabel = (ch: string) => ch === "amazon" ? "Amazon" : ch === "rakuten" ? "楽天" : "Shopify";
+                const chColor = (ch: string) => ch === "amazon" ? "bg-orange-500" : ch === "rakuten" ? "bg-red-500" : "bg-green-500";
+                return (
                 <div key={i}>
-                  <div className="flex items-center justify-between text-sm mb-1">
-                    <span className="font-medium">{g.group}</span>
+                  <div className={`flex items-center justify-between text-sm mb-1 ${g.hasGoal && g.channels.length > 0 ? "cursor-pointer" : ""}`} onClick={() => g.hasGoal && g.channels.length > 0 && toggleGoalGroup(g.group)}>
+                    <span className="font-medium flex items-center gap-1">
+                      {g.hasGoal && g.channels.length > 0 && (expanded ? <ChevronDown className="h-3 w-3 text-[hsl(var(--muted-foreground))]" /> : <ChevronRight className="h-3 w-3 text-[hsl(var(--muted-foreground))]" />)}
+                      {g.group}
+                    </span>
                     {g.hasGoal ? (
-                      <span>
+                      <span className="flex items-center gap-3">
                         <span className={`font-bold ${g.pct >= 100 ? "text-green-500" : g.pct >= 80 ? "text-orange-400" : "text-red-500"}`}>
                           {g.pct.toFixed(1)}%
                         </span>
-                        <span className="ml-2 text-xs text-[hsl(var(--muted-foreground))]">
-                          {formatCurrency(g.projected)} / {formatCurrency(g.target)}
+                        <span className="text-xs text-[hsl(var(--muted-foreground))]">
+                          {formatCurrency(g.currentSales)} / {formatCurrency(g.target)}
+                        </span>
+                        <span className={`text-[10px] ${g.projPct >= 100 ? "text-green-500/70" : "text-orange-400/70"}`}>
+                          (着地 {g.projPct.toFixed(0)}%)
                         </span>
                       </span>
                     ) : (
@@ -546,13 +581,38 @@ export default function DashboardPage() {
                   <div className="h-3 w-full rounded-full bg-[hsl(var(--muted))] overflow-hidden relative">
                     <div
                       className={`h-full rounded-full transition-all ${g.pct >= 100 ? "bg-green-500" : g.pct >= 80 ? "bg-orange-400" : "bg-red-500"}`}
-                      style={{ width: `${Math.min(120, g.pct)}%` }}
+                      style={{ width: `${Math.min(100, g.pct)}%` }}
                     />
-                    {/* 100%マーカー */}
-                    <div className="absolute top-0 h-full w-0.5 bg-white/50" style={{ left: `${Math.min(100, 100 / Math.max(g.pct, 100) * 100)}%` }} />
                   </div>
+                  {/* チャネル別詳細 */}
+                  {expanded && g.channels.map((ch) => (
+                    <div key={ch.channel} className="ml-6 mt-2">
+                      <div className="flex items-center justify-between text-xs mb-0.5">
+                        <span className="text-[hsl(var(--muted-foreground))]">{chLabel(ch.channel)}</span>
+                        {ch.target > 0 ? (
+                          <span className="flex items-center gap-2">
+                            <span className={`font-bold ${ch.pct >= 100 ? "text-green-500" : ch.pct >= 80 ? "text-orange-400" : "text-red-500"}`}>
+                              {ch.pct.toFixed(1)}%
+                            </span>
+                            <span className="text-[hsl(var(--muted-foreground))]">
+                              {formatCurrency(ch.sales)} / {formatCurrency(ch.target)}
+                            </span>
+                            <span className={`text-[10px] ${ch.projPct >= 100 ? "text-green-500/70" : "text-orange-400/70"}`}>
+                              (着地 {ch.projPct.toFixed(0)}%)
+                            </span>
+                          </span>
+                        ) : (
+                          <span className="text-[hsl(var(--muted-foreground))]">実績 {formatCurrency(ch.sales)}</span>
+                        )}
+                      </div>
+                      <div className="h-1.5 w-full rounded-full bg-[hsl(var(--muted))] overflow-hidden relative">
+                        <div className={`h-full rounded-full transition-all ${ch.target > 0 ? (ch.pct >= 100 ? "bg-green-500" : ch.pct >= 80 ? "bg-orange-400" : "bg-red-500") : chColor(ch.channel)}`} style={{ width: ch.target > 0 ? `${Math.min(100, ch.pct)}%` : "100%" }} />
+                      </div>
+                    </div>
+                  ))}
                 </div>
-              ))}
+                );
+              })}
             </div>
           </CardContent>
         </Card>

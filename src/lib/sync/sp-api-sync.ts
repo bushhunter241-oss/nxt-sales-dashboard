@@ -537,12 +537,16 @@ export async function syncBSR(): Promise<SyncResult> {
   const errors: string[] = [];
   let recordsProcessed = 0;
 
-  // 1. Get all active products with ASINs
+  // 1. Get all active products with ASINs (excluding parent ASINs)
+  // 親ASINに対する Catalog Items API は salesRanks を返さず 403 になるため除外。
+  // バリエーションファミリーのBSRは子ASIN単位で別途取得される。
+  // is_parent が NULL のレコード（カラム未設定の旧データ等）はフォールバックで含める。
   const { data: products } = await db
     .from("products")
     .select("id, asin, name")
     .eq("is_archived", false)
-    .not("asin", "is", null);
+    .not("asin", "is", null)
+    .or("is_parent.is.null,is_parent.eq.false");
 
   if (!products || products.length === 0) {
     return {

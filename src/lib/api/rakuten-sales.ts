@@ -518,6 +518,122 @@ export async function importRakutenSalesCSV(
   return { success: errors.length === 0, upserted, errors };
 }
 
+/**
+ * 日別の利益内訳を商品別サマリーと同一ロジックで集計して返す。
+ * getRakutenProductSalesSummary と同じ計算経路なので日別合計 = 商品別合計の総和が保証される。
+ *
+ * 返値: date → { cost, fee, shipping, profit }
+ */
+export async function getRakutenDailyProfitBreakdown(params: {
+  startDate?: string;
+  endDate?: string;
+}): Promise<Record<string, { cost: number; fee: number; shipping: number; profit: number }>> {
+  // 1. 売上データ（商品マスタ込み）
+  let salesQuery = supabase
+    .from("rakuten_daily_sales")
+    .select("product_id, date, sales_amount, units_sold, rakuten_product:rakuten_products(id, product_id, cost_price, shipping_fee, fee_rate, is_archived, parent_product_id)");
+
+  if (params.startDate) salesQuery = salesQuery.gte("date", params.startDate);
+  if (params.endDate) salesQuery = salesQuery.lte("date", params.endDate);
+
+  const { data: salesData } = await salesQuery;
+
+  // 2. SKU別コスト全件
+  const { data: skuCosts } = await supabase
+    .from("rakuten_sku_costs")
+    .select("manage_number, sku_id, cost_price, shipping_fee");
+
+  const costMap = new Map<string, { cost_price: number; shipping_fee: number }>();
+  for (const sc of skuCosts || []) {
+    costMap.set(`${sc.manage_number}::${sc.sku_id}`, { cost_price: sc.cost_price, shipping_fee: sc.shipping_fee });
+  }
+
+  // 3. 日別×SKU別販売数
+  let skuQuery = supabase
+    .from("rakuten_daily_sku_sales")
+    .select("date, manage_number, sku_id, units_sold");
+
+  if (params.startDate) skuQuery = skuQuery.gte("date", params.startDate);
+  if (params.endDate) skuQuery = skuQuery.lte("date", params.endDate);
+
+  const { data: skuSales } = await skuQuery;
+
+  // SKU別コスト集計: date → { cost, shipping }
+  const skuByDate: Record<string, { cost: number; shipping: number }> = {};
+  for (const ss of skuSales || []) {
+    const cost = costMap.get(`${ss.manage_number}::${ss.sku_id || ""}`);
+    if (!cost) continue;
+    if (!skuByDate[ss.date]) skuByDate[ss.date] = { cost: 0, shipping: 0 };
+    skuByDate[ss.date].cost += cost.cost_price * ss.units_sold;
+    skuByDate[ss.date].shipping += cost.shipping_fee * ss.units_sold;
+  }
+
+  // 商品マスタフォールバック用: product UUID → コスト情報
+  const productCostMap = new Map<string, { cost_price: number; shipping_fee: number; fee_rate: number }>();
+  for (const row of salesData || []) {
+    const p = row.rakuten_product as any;
+    if (!p || p.is_archived) continue;
+    if (!productCostMap.has(row.product_id)) {
+      productCostMap.set(row.product_id, {
+        cost_price: p.cost_price || 0,
+        shipping_fee: p.shipping_fee || 0,
+        fee_rate: p.fee_rate || 10,
+      });
+    }
+  }
+
+  // 4. 日別に集計（fee は商品マスタベース、cost/shipping は SKU優先→商品マスタフォールバック）
+  const byDate: Record<string, { cost: number; fee: number; shipping: number; salesAmount: number }> = {};
+
+  for (const row of salesData || []) {
+    const p = row.rakuten_product as any;
+    if (!p || p.is_archived) continue;
+    const date = row.date;
+    if (!byDate[date]) byDate[date] = { cost: 0, fee: 0, shipping: 0, salesAmount: 0 };
+    byDate[date].salesAmount += row.sales_amount || 0;
+    const feeRate = (p.fee_rate || 10);
+    byDate[date].fee += Math.round((row.sales_amount || 0) * (feeRate / 100));
+    // cost/shipping は SKU集計で上書きするので一旦商品マスタで積算
+    byDate[date].cost += (p.cost_price || 0) * (row.units_sold || 0);
+    byDate[date].shipping += (p.shipping_fee || 0) * (row.units_sold || 0);
+  }
+
+  // SKU集計があれば cost/shipping を上書き（商品マスタよりも正確）
+  for (const [date, sku] of Object.entries(skuByDate)) {
+    if (!byDate[date]) continue;
+    if (sku.cost > 0 || sku.shipping > 0) {
+      // SKU集計は「SKUマッチした商品のみ」のため、商品マスタ合計との差分（未マッチ分）を加算
+      // 日別SKU合計が商品マスタ合計を超える場合はSKUを信頼、下回る場合は商品マスタ側の未マッチ分を保持
+      byDate[date].cost = Math.max(sku.cost, byDate[date].cost);
+      byDate[date].shipping = Math.max(sku.shipping, byDate[date].shipping);
+    }
+  }
+
+  // 広告費取得
+  let adQuery = supabase.from("rakuten_daily_advertising").select("date, ad_spend");
+  if (params.startDate) adQuery = adQuery.gte("date", params.startDate);
+  if (params.endDate) adQuery = adQuery.lte("date", params.endDate);
+  const { data: adData } = await adQuery;
+
+  const adByDate: Record<string, number> = {};
+  for (const row of adData || []) {
+    adByDate[row.date] = (adByDate[row.date] || 0) + row.ad_spend;
+  }
+
+  // 最終集計
+  const result: Record<string, { cost: number; fee: number; shipping: number; profit: number }> = {};
+  for (const [date, d] of Object.entries(byDate)) {
+    const adSpend = adByDate[date] || 0;
+    result[date] = {
+      cost: d.cost,
+      fee: d.fee,
+      shipping: d.shipping,
+      profit: d.salesAmount - d.cost - d.fee - d.shipping - adSpend,
+    };
+  }
+  return result;
+}
+
 export async function getRakutenProducts(includeArchived = false) {
   let query = supabase
     .from("rakuten_products")

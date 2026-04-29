@@ -1,5 +1,5 @@
 "use client";
-import { useState, useMemo } from "react";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { PageHeader } from "@/components/layout/page-header";
 import { PeriodFilter } from "@/components/layout/period-filter";
@@ -7,25 +7,10 @@ import { KPICard } from "@/components/layout/kpi-card";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatCurrency, formatPercent, formatNumber, formatDate, getDateRange } from "@/lib/utils";
-import { getRakutenDailySales, getRakutenDailyAdSpendByDate, getRakutenDailyCostBreakdown } from "@/lib/api/rakuten-sales";
-import { getRakutenProducts } from "@/lib/api/rakuten-products";
+import { getRakutenDailySales, getRakutenDailyAdSpendByDate, getRakutenDailyProfitBreakdown } from "@/lib/api/rakuten-sales";
 import { DollarSign, TrendingUp, ShoppingCart, BarChart3, Wallet, Eye } from "lucide-react";
 import { Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ComposedChart, ReferenceLine } from "recharts";
 import { CHART_COLORS } from "@/lib/constants";
-
-interface DailyAggregated {
-  date: string;
-  sales_amount: number;
-  orders: number;
-  access_count: number;
-  units_sold: number;
-  cost: number;
-  fee: number;
-  shipping_fee: number;
-  ad_spend: number;
-  profit: number;
-  profit_rate: number;
-}
 
 export default function RakutenDailyPage() {
   const [period, setPeriod] = useState("this_month");
@@ -41,87 +26,35 @@ export default function RakutenDailyPage() {
     queryFn: () => getRakutenDailyAdSpendByDate(dateRange),
   });
 
-  // SKU別の正確な原価・送料を日別に取得（ダッシュボード/商品別分析と整合させる）
-  const { data: skuCostByDate = {} } = useQuery({
-    queryKey: ["rakutenDailySkuCost", dateRange],
-    queryFn: () => getRakutenDailyCostBreakdown(dateRange),
+  // 商品別ページと同じロジックで日別利益を集計（日別合計 = 商品別合計の総和を保証）
+  const { data: profitByDate = {} } = useQuery({
+    queryKey: ["rakutenDailyProfitBreakdown", dateRange],
+    queryFn: () => getRakutenDailyProfitBreakdown(dateRange),
   });
 
-  // All rakuten products for parent fallback
-  const { data: allProducts = [] } = useQuery({
-    queryKey: ["rakutenProductsAll"],
-    queryFn: () => getRakutenProducts(true),
-  });
-
-  // Build parent lookup: product_id → product data
-  const parentLookup = useMemo(() => {
-    const byProductId = new Map<string, any>();
-    for (const p of allProducts as any[]) {
-      if (p.product_id) byProductId.set(p.product_id, p);
-    }
-    return byProductId;
-  }, [allProducts]);
-
-  // Resolve cost/fee/shipping with parent fallback
-  const resolveProductCosts = (product: any) => {
-    let costPrice = product?.cost_price || 0;
-    let feeRate = product?.fee_rate || 0;
-    let shippingFee = product?.shipping_fee || 0;
-
-    // If any value is 0 and product has a parent, try parent's values
-    if (product?.parent_product_id && (costPrice === 0 || feeRate === 0 || shippingFee === 0)) {
-      const parent = parentLookup.get(product.parent_product_id);
-      if (parent) {
-        if (costPrice === 0) costPrice = parent.cost_price || 0;
-        if (feeRate === 0) feeRate = parent.fee_rate || 0;
-        if (shippingFee === 0) shippingFee = parent.shipping_fee || 0;
-      }
-    }
-
-    // Default fee_rate fallback
-    if (feeRate === 0) feeRate = 10;
-
-    return { costPrice, feeRate, shippingFee };
-  };
-
-  const aggregated = (salesData as any[]).reduce((acc: Record<string, DailyAggregated>, row: any) => {
+  // 日別売上・注文・アクセスを集計
+  const salesAgg = (salesData as any[]).reduce((acc: Record<string, { sales_amount: number; orders: number; access_count: number; units_sold: number }>, row: any) => {
     const d = row.date;
-    if (!acc[d]) {
-      acc[d] = { date: d, sales_amount: 0, orders: 0, access_count: 0, units_sold: 0, cost: 0, fee: 0, shipping_fee: 0, ad_spend: 0, profit: 0, profit_rate: 0 };
-    }
+    if (!acc[d]) acc[d] = { sales_amount: 0, orders: 0, access_count: 0, units_sold: 0 };
     acc[d].sales_amount += row.sales_amount || 0;
     acc[d].orders += row.orders || 0;
     acc[d].access_count += row.access_count || 0;
     acc[d].units_sold += row.units_sold || 0;
-
-    const product = row.rakuten_product;
-    if (product) {
-      const { costPrice, feeRate, shippingFee } = resolveProductCosts(product);
-      const units = row.units_sold || 0;
-      // 商品マスタベースの原価・送料（SKU別データがない日のフォールバック用）
-      acc[d].cost += costPrice * units;
-      acc[d].fee += Math.round((row.sales_amount || 0) * (feeRate / 100));
-      acc[d].shipping_fee += shippingFee * units;
-    }
     return acc;
-  }, {} as Record<string, DailyAggregated>);
+  }, {});
 
-  // SKU別原価が取得できる日は商品マスタベースの値を上書き（より正確）
-  for (const [date, sku] of Object.entries(skuCostByDate as Record<string, { cost: number; shipping: number }>)) {
-    if (aggregated[date] && (sku.cost > 0 || sku.shipping > 0)) {
-      aggregated[date].cost = sku.cost;
-      aggregated[date].shipping_fee = sku.shipping;
-    }
-  }
-
-  const dailyData: DailyAggregated[] = Object.values(aggregated)
-    .map((day) => {
-      const adSpend = (adSpendByDate as Record<string, number>)[day.date] || 0;
-      const profit = day.sales_amount - day.cost - day.fee - day.shipping_fee - adSpend;
-      const profitRate = day.sales_amount > 0 ? (profit / day.sales_amount) * 100 : 0;
-      return { ...day, ad_spend: adSpend, profit, profit_rate: profitRate };
-    })
-    .sort((a, b) => b.date.localeCompare(a.date));
+  const dailyData = Object.keys(salesAgg).map((date) => {
+    const s = salesAgg[date];
+    const pb = (profitByDate as Record<string, { cost: number; fee: number; shipping: number; profit: number }>)[date];
+    const adSpend = (adSpendByDate as Record<string, number>)[date] || 0;
+    const cost = pb?.cost ?? 0;
+    const fee = pb?.fee ?? 0;
+    const shipping = pb?.shipping ?? 0;
+    // profit from getRakutenDailyProfitBreakdown already includes ad_spend subtraction
+    const profit = pb ? pb.profit : s.sales_amount - cost - fee - shipping - adSpend;
+    const profitRate = s.sales_amount > 0 ? (profit / s.sales_amount) * 100 : 0;
+    return { date, ...s, cost, fee, shipping_fee: shipping, ad_spend: adSpend, profit, profit_rate: profitRate };
+  }).sort((a, b) => b.date.localeCompare(a.date));
 
   const chartData = [...dailyData].reverse().map((d) => ({
     date: d.date.slice(5),

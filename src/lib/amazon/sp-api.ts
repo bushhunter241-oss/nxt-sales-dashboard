@@ -38,12 +38,13 @@ async function spApiRequest<T>(options: SpApiRequestOptions): Promise<T> {
       return response.json();
     }
 
-    // Rate limit - wait and retry
+    // Rate limit - wait and retry (cap at 120s to avoid extreme waits)
     if (response.status === 429) {
       const retryAfter = response.headers.get("Retry-After");
-      const waitMs = retryAfter
+      const rawWaitMs = retryAfter
         ? parseInt(retryAfter) * 1000
         : AMAZON_CONFIG.INITIAL_RETRY_DELAY_MS * Math.pow(2, retries);
+      const waitMs = Math.min(rawWaitMs, 120000);
       await sleep(waitMs);
       retries++;
       continue;

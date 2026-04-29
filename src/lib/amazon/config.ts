@@ -18,7 +18,7 @@ export const AMAZON_CONFIG = {
   ADS_API_RATE_LIMIT: 10, // requests per second
 
   // Retry config
-  MAX_RETRIES: 3,
+  MAX_RETRIES: 6,
   INITIAL_RETRY_DELAY_MS: 1000,
 
   // Report polling

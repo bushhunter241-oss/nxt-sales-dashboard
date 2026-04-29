@@ -213,29 +213,35 @@ export async function syncOrders(
   const records = Array.from(aggregateMap.values());
 
   for (const record of records) {
-    // Check if a row already exists (may have sessions from traffic sync)
+    // Check if a row already exists (may have sales data from traffic sync)
     const { data: existing } = await db
       .from("daily_sales")
-      .select("id, sessions")
+      .select("id, sessions, sales_amount, source")
       .eq("product_id", record.product_id)
       .eq("date", record.date)
       .maybeSingle();
 
     let error;
     if (existing) {
-      // Update only order-related fields, preserve sessions/cvr from traffic sync
+      // Traffic sync (Sales & Traffic Report) is the authoritative source for sales figures.
+      // Only update cancellations here; preserve sales_amount/orders/units_sold already set by traffic sync.
+      // If traffic sync has not run yet (sales_amount=0), write the Orders API values as a placeholder.
+      const trafficAlreadySet = existing.sales_amount > 0;
+      const updatePayload = trafficAlreadySet
+        ? { cancellations: record.cancellations }
+        : {
+            orders: record.orders,
+            sales_amount: record.sales_amount,
+            units_sold: record.units_sold,
+            cancellations: record.cancellations,
+            source: "sp-api" as const,
+          };
       ({ error } = await db
         .from("daily_sales")
-        .update({
-          orders: record.orders,
-          sales_amount: record.sales_amount,
-          units_sold: record.units_sold,
-          cancellations: record.cancellations,
-          source: "sp-api",
-        })
+        .update(updatePayload)
         .eq("id", existing.id));
     } else {
-      // No existing row, insert full record
+      // No existing row, insert full record (traffic sync will overwrite later)
       ({ error } = await db.from("daily_sales").insert(record));
     }
 
@@ -508,6 +514,12 @@ export async function syncTraffic(
         const msg = dayError instanceof Error ? dayError.message : String(dayError);
         errors.push(`Traffic sync error for ${date}: ${msg}`);
         console.error(`[SP-API Traffic] Error for ${date}:`, msg);
+      }
+
+      // Reports API createReport is ~1 req/min rate limit.
+      // Wait 8s between days to avoid 429 when syncing multi-day ranges.
+      if (dates.indexOf(date) < dates.length - 1) {
+        await syncSleep(8000);
       }
     }
 

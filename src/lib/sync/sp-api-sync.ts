@@ -516,10 +516,10 @@ export async function syncTraffic(
         console.error(`[SP-API Traffic] Error for ${date}:`, msg);
       }
 
-      // Reports API createReport is ~1 req/min rate limit.
-      // Wait 8s between days to avoid 429 when syncing multi-day ranges.
+      // Reports API createReport rate limit is 0.0167 req/s (1 per minute).
+      // Wait 62s between days to stay within the limit on multi-day ranges.
       if (dates.indexOf(date) < dates.length - 1) {
-        await syncSleep(8000);
+        await syncSleep(62000);
       }
     }
 

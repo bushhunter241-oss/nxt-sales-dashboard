@@ -558,7 +558,38 @@ export async function getCatalogItemBSR(asin: string): Promise<CatalogBsrItem | 
     return { asin, rankings };
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
+    // SP-APIのエラーレスポンスから errors 配列をパースして個別フィールドをログ出力
+    // spApiRequest が `SP-API error (${status}): ${errorText}` 形式で throw するため、
+    // errorText を取り出してJSONとして再パースし、code/message/details を構造化ログに出す。
+    let parsedSpApiBody: unknown = null;
+    // /s (dotall) フラグはターゲットES2018+必要なので、代わりに [\s\S] を使う
+    const bodyMatch = msg.match(/^SP-API error \(\d+\):\s*([\s\S]*)$/);
+    if (bodyMatch) {
+      const bodyText = bodyMatch[1].trim();
+      try {
+        parsedSpApiBody = JSON.parse(bodyText);
+      } catch {
+        parsedSpApiBody = { raw_body: bodyText };
+      }
+    }
+
     console.error(`[BSR] ${asin}: Catalog API error: ${msg}`);
+    console.error(
+      `[BSR] ${asin}: Error details:`,
+      JSON.stringify(
+        {
+          name: error instanceof Error ? error.name : null,
+          message: msg,
+          spApiBody: parsedSpApiBody,
+          stack: error instanceof Error
+            ? error.stack?.split("\n").slice(0, 5)
+            : null,
+        },
+        null,
+        2
+      )
+    );
+
     bsrDebugInfo = `Catalog API error for ${asin}: ${msg}`;
     return { asin, rankings: [] };
   }

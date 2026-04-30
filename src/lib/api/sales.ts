@@ -32,7 +32,8 @@ export async function getDailySales(params: {
     offset += PAGE_SIZE;
   }
 
-  return allData.filter((r: any) => !r.product?.is_archived && !r.product?.is_parent);
+  // filterOutParentAsins で商品別と同じ除外ルールを適用（3ページ統一）
+  return filterOutParentAsins(allData);
 }
 
 export async function getAggregatedDailySales(params: {

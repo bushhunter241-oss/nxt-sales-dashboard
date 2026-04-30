@@ -6,18 +6,32 @@ export async function getDailyAdvertising(params: {
   endDate?: string;
   productId?: string;
 }) {
-  let query = supabase
-    .from("daily_advertising")
-    .select("*, product:products(*)")
-    .order("date", { ascending: false });
+  // Supabaseの1000件制限に対応するためページネーション（getDailySalesと同じ方式）
+  const allData: any[] = [];
+  const PAGE_SIZE = 1000;
+  let offset = 0;
+  let hasMore = true;
 
-  if (params.startDate) query = query.gte("date", params.startDate);
-  if (params.endDate) query = query.lte("date", params.endDate);
-  if (params.productId) query = query.eq("product_id", params.productId);
+  while (hasMore) {
+    let query = supabase
+      .from("daily_advertising")
+      .select("*, product:products(*)")
+      .order("date", { ascending: false })
+      .range(offset, offset + PAGE_SIZE - 1);
 
-  const { data, error } = await query;
-  if (error) throw error;
-  return (data || []).filter((r: any) => !r.product?.is_archived && !r.product?.is_parent);
+    if (params.startDate) query = query.gte("date", params.startDate);
+    if (params.endDate) query = query.lte("date", params.endDate);
+    if (params.productId) query = query.eq("product_id", params.productId);
+
+    const { data, error } = await query;
+    if (error) throw error;
+
+    allData.push(...(data || []));
+    hasMore = (data?.length || 0) === PAGE_SIZE;
+    offset += PAGE_SIZE;
+  }
+
+  return allData.filter((r: any) => !r.product?.is_archived && !r.product?.is_parent);
 }
 
 export async function getAdSummary(params: {
@@ -56,22 +70,33 @@ export async function getDailyAdSpendByDate(params: {
   startDate?: string;
   endDate?: string;
 }) {
-  let query = supabase
-    .from("daily_advertising")
-    .select("date, ad_spend, product:products(is_archived, is_parent)");
+  const allData: any[] = [];
+  const PAGE_SIZE = 1000;
+  let offset = 0;
+  let hasMore = true;
 
-  if (params.startDate) query = query.gte("date", params.startDate);
-  if (params.endDate) query = query.lte("date", params.endDate);
+  while (hasMore) {
+    let query = supabase
+      .from("daily_advertising")
+      .select("date, ad_spend, product:products(is_archived, is_parent)")
+      .range(offset, offset + PAGE_SIZE - 1);
 
-  const { data, error } = await query;
-  if (error) {
-    console.warn("getDailyAdSpendByDate error:", error);
-    return {};
+    if (params.startDate) query = query.gte("date", params.startDate);
+    if (params.endDate) query = query.lte("date", params.endDate);
+
+    const { data, error } = await query;
+    if (error) {
+      console.warn("getDailyAdSpendByDate error:", error);
+      return {};
+    }
+
+    allData.push(...(data || []));
+    hasMore = (data?.length || 0) === PAGE_SIZE;
+    offset += PAGE_SIZE;
   }
 
-  // Aggregate ad_spend by date (exclude archived/parent products)
   const byDate: Record<string, number> = {};
-  for (const row of data || []) {
+  for (const row of allData) {
     const product = row.product as any;
     if (product?.is_archived || product?.is_parent) continue;
     byDate[row.date] = (byDate[row.date] || 0) + row.ad_spend;

@@ -50,10 +50,20 @@ export default function MonthlyAnalysisPage() {
   const { data: expensesData = [] } = useQuery({
     queryKey: ["allExpenses"],
     queryFn: async () => {
-      const { data } = await supabase
-        .from("expenses")
-        .select("date, amount, product_id");
-      return data || [];
+      const allExpenses: any[] = [];
+      const PAGE_SIZE = 1000;
+      let offset = 0;
+      let hasMore = true;
+      while (hasMore) {
+        const { data } = await supabase
+          .from("expenses")
+          .select("date, amount, product_id")
+          .range(offset, offset + PAGE_SIZE - 1);
+        allExpenses.push(...(data || []));
+        hasMore = (data?.length || 0) === PAGE_SIZE;
+        offset += PAGE_SIZE;
+      }
+      return allExpenses;
     },
   });
 

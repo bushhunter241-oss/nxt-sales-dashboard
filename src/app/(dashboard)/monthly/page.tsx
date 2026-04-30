@@ -121,18 +121,29 @@ export default function MonthlyAnalysisPage() {
     return acc;
   }, {} as Record<string, any>);
 
-  // Filter: only keep last 12 months (exclude old/test data like 2025-01)
+  // 月の一覧 = daily_sales の月 ∪ overrides の月（override だけある月も表示する）
   const now = new Date();
   const cutoff = `${now.getFullYear() - 1}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-  const monthlyData = Object.values(monthly)
-    .filter((m: any) => m.month >= cutoff)
-    .sort((a: any, b: any) => b.month.localeCompare(a.month))
-    .map((row: any) => {
-      const override = (overrides as Record<string, any>)[row.month];
-      const adAgg = (monthlyAd as Record<string, any>)[row.month];
-      const adOverride = (adOverrides as Record<string, any>)[row.month];
+  const allMonths = new Set([
+    ...Object.keys(monthly),
+    ...Object.keys(overrides as Record<string, any>),
+  ]);
+  const monthlyData = [...allMonths]
+    .filter((m) => m >= cutoff)
+    .sort((a, b) => b.localeCompare(a))
+    .map((month) => {
+      // daily_sales 集計がない月（override だけある月）はゼロ基準で初期化
+      const row = (monthly as Record<string, any>)[month] ?? {
+        month,
+        sales_amount: 0, orders: 0, sessions: 0, units_sold: 0,
+        cost: 0, fba_fee: 0, point_cost: 0,
+      };
 
-      // Apply sales overrides
+      const override = (overrides as Record<string, any>)[month];
+      const adAgg = (monthlyAd as Record<string, any>)[month];
+      const adOverride = (adOverrides as Record<string, any>)[month];
+
+      // Apply sales overrides（override がある月は override 値を優先）
       const result = override ? {
         ...row,
         sales_amount: override.total_sales,
@@ -143,8 +154,8 @@ export default function MonthlyAnalysisPage() {
         _overridden: true,
       } : { ...row };
 
-      // CSV補正で売上が上書きされた月は、原価・FBA手数料・ポイント原資も
-      // 売上比率でスケーリングして整合性を保つ（補正前売上が0の月は補正なし扱い）。
+      // CSV補正で売上が上書きされた月は原価・FBA手数料・ポイント原資も比率スケーリング
+      // daily_sales が0の月（override だけ）はスケーリング不可のためゼロのまま
       if (override && row.sales_amount > 0 && override.total_sales > 0) {
         const scale = override.total_sales / row.sales_amount;
         result.cost = Math.round((row.cost || 0) * scale);
@@ -152,7 +163,7 @@ export default function MonthlyAnalysisPage() {
         result.point_cost = Math.round((row.point_cost || 0) * scale);
       }
 
-      // Apply ad data (override takes priority over aggregated)
+      // Apply ad data（override 優先、次に集計値）
       if (adOverride) {
         result.ad_spend = adOverride.total_ad_spend;
         result.ad_sales = adOverride.total_ad_sales;
@@ -166,7 +177,7 @@ export default function MonthlyAnalysisPage() {
       }
 
       // Profit calculation（経費を含む — 日別・商品別と統一）
-      const expenses = expensesByMonth[row.month] || 0;
+      const expenses = expensesByMonth[month] || 0;
       const { net_profit: profit, profit_rate } = calcNetProfit(
         result.sales_amount,
         result.cost || 0,

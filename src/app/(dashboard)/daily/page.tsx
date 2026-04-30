@@ -10,6 +10,7 @@ import { formatCurrency, formatPercent, formatNumber, formatDate, getDateRange }
 import { getDailySales } from "@/lib/api/sales";
 import { getDailyAdSpendByDateCampaignLevel } from "@/lib/api/advertising";
 import { supabase } from "@/lib/supabase";
+import { calcRowCosts, calcNetProfit } from "@/lib/api/profit";
 import { DollarSign, TrendingUp, ShoppingCart, BarChart3, Wallet } from "lucide-react";
 import { Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ComposedChart, ReferenceLine } from "recharts";
 import { CHART_COLORS } from "@/lib/constants";
@@ -93,26 +94,22 @@ export default function DailyAnalysisPage() {
     acc[d].sessions += row.sessions;
     acc[d].units_sold += row.units_sold;
 
-    // Per-product cost and FBA fee calculation (sales.ts getProductSalesSummary と同じ計算式)
+    // profit.ts の共通関数で費用計算（sales.ts と同じ計算式を保証）
     const product = row.product;
     if (product) {
-      const costPrice = product.cost_price || 0;
-      const fbaFeeRate = product.fba_fee_rate || 15;
-      const fbaShippingFee = product.fba_shipping_fee || 0;
-      const pointRate = product.point_rate || 0;
-      const units = row.units_sold || 0;
-      acc[d].cost += costPrice * units;
-      acc[d].fba_fee += Math.round(row.sales_amount * (fbaFeeRate / 100)) + fbaShippingFee * units;
-      acc[d].point_cost += Math.round(row.sales_amount * (pointRate / 100));
-
-      // 施策カレンダーのイベント型ポイント施策（該当日×商品グループ）
       const productGroup = product.product_group;
-      if (productGroup && row.date) {
-        const eventRate = pointEventMap[`${row.date}|${productGroup}`];
-        if (eventRate) {
-          acc[d].point_cost += Math.round(row.sales_amount * (eventRate / 100));
-        }
-      }
+      const eventRate = (productGroup && row.date)
+        ? pointEventMap[`${row.date}|${productGroup}`]
+        : undefined;
+      const { cost, fba_fee, point_cost } = calcRowCosts(
+        row.sales_amount,
+        row.units_sold || 0,
+        product,
+        eventRate,
+      );
+      acc[d].cost += cost;
+      acc[d].fba_fee += fba_fee;
+      acc[d].point_cost += point_cost;
     }
 
     return acc;
@@ -123,8 +120,9 @@ export default function DailyAnalysisPage() {
     .map((day) => {
       const adSpend = (adSpendByDate as Record<string, number>)[day.date] || 0;
       const expenses = expensesByDate[day.date] || 0;
-      const profit = day.sales_amount - day.cost - day.fba_fee - day.point_cost - expenses - adSpend;
-      const profitRate = day.sales_amount > 0 ? (profit / day.sales_amount) * 100 : 0;
+      const { net_profit: profit, profit_rate: profitRate } = calcNetProfit(
+        day.sales_amount, day.cost, day.fba_fee, day.point_cost, adSpend, expenses
+      );
       return { ...day, ad_spend: adSpend, expenses, profit, profit_rate: profitRate };
     })
     .sort((a, b) => b.date.localeCompare(a.date));

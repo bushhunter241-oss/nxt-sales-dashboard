@@ -9,6 +9,7 @@ import { getDailySales } from "@/lib/api/sales";
 import { getDailyAdvertising } from "@/lib/api/advertising";
 import { getMonthlyOverrides, getMonthlyAdOverrides } from "@/lib/api/amazon-monthly-overrides";
 import { supabase } from "@/lib/supabase";
+import { calcRowCosts, calcNetProfit } from "@/lib/api/profit";
 import { BarChart, Bar, Line, ComposedChart, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ReferenceLine } from "recharts";
 import { CHART_COLORS } from "@/lib/constants";
 
@@ -45,6 +46,17 @@ export default function MonthlyAnalysisPage() {
     },
   });
 
+  // 経費（商品別のみ。product_id=null の全体経費は3ビュー統一方針で除外）
+  const { data: expensesData = [] } = useQuery({
+    queryKey: ["allExpenses"],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("expenses")
+        .select("date, amount, product_id");
+      return data || [];
+    },
+  });
+
   // ポイント施策ルックアップ: "date|product_group" → discount_rate
   const pointEventMap: Record<string, number> = {};
   for (const ev of pointEvents as any[]) {
@@ -53,7 +65,15 @@ export default function MonthlyAnalysisPage() {
     pointEventMap[key] = Math.max(pointEventMap[key] || 0, ev.discount_rate);
   }
 
-  // Aggregate sales by month (with profit calculation)
+  // 月別経費合計（product_id=null の全体経費は3ビュー統一方針で除外）
+  const expensesByMonth: Record<string, number> = {};
+  for (const ex of expensesData as any[]) {
+    if (!ex.product_id) continue;
+    const month = (ex.date as string).slice(0, 7);
+    expensesByMonth[month] = (expensesByMonth[month] || 0) + ex.amount;
+  }
+
+  // Aggregate sales by month (profit.ts の共通関数で費用計算)
   const monthly = (salesData as any[]).reduce((acc: Record<string, any>, row: any) => {
     const month = row.date.slice(0, 7);
     if (!acc[month]) acc[month] = { month, sales_amount: 0, orders: 0, sessions: 0, units_sold: 0, cost: 0, fba_fee: 0, point_cost: 0 };
@@ -61,22 +81,22 @@ export default function MonthlyAnalysisPage() {
     acc[month].orders += row.orders;
     acc[month].sessions += row.sessions;
     acc[month].units_sold += row.units_sold;
-    // Per-product cost calculation
+
     const product = row.product;
     if (product) {
-      const units = row.units_sold || 0;
-      acc[month].cost += (product.cost_price || 0) * units;
-      acc[month].fba_fee += Math.round(row.sales_amount * ((product.fba_fee_rate || 15) / 100)) + (product.fba_shipping_fee || 0) * units;
-      acc[month].point_cost += Math.round(row.sales_amount * ((product.point_rate || 0) / 100));
-
-      // 施策カレンダーのイベント型ポイント施策（該当日×商品グループ）
       const productGroup = product.product_group;
-      if (productGroup && row.date) {
-        const eventRate = pointEventMap[`${row.date}|${productGroup}`];
-        if (eventRate) {
-          acc[month].point_cost += Math.round(row.sales_amount * (eventRate / 100));
-        }
-      }
+      const eventRate = (productGroup && row.date)
+        ? pointEventMap[`${row.date}|${productGroup}`]
+        : undefined;
+      const { cost, fba_fee, point_cost } = calcRowCosts(
+        row.sales_amount,
+        row.units_sold || 0,
+        product,
+        eventRate,
+      );
+      acc[month].cost += cost;
+      acc[month].fba_fee += fba_fee;
+      acc[month].point_cost += point_cost;
     }
     return acc;
   }, {});
@@ -135,10 +155,19 @@ export default function MonthlyAnalysisPage() {
         result.ad_sales = 0;
       }
 
-      // Profit calculation
-      const profit = result.sales_amount - (result.cost || 0) - (result.fba_fee || 0) - (result.point_cost || 0) - (result.ad_spend || 0);
+      // Profit calculation（経費を含む — 日別・商品別と統一）
+      const expenses = expensesByMonth[row.month] || 0;
+      const { net_profit: profit, profit_rate } = calcNetProfit(
+        result.sales_amount,
+        result.cost || 0,
+        result.fba_fee || 0,
+        result.point_cost || 0,
+        result.ad_spend || 0,
+        expenses,
+      );
+      result.expenses = expenses;
       result.profit = profit;
-      result.profit_rate = result.sales_amount > 0 ? (profit / result.sales_amount) * 100 : 0;
+      result.profit_rate = profit_rate;
 
       return result;
     });

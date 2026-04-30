@@ -1,5 +1,6 @@
 import { supabase } from "@/lib/supabase";
 import { DailySales } from "@/types/database";
+import { calcRowCosts, calcNetProfit } from "@/lib/api/profit";
 
 export async function getDailySales(params: {
   startDate?: string;
@@ -187,42 +188,35 @@ export async function getProductSalesSummary(params: {
     return acc;
   }, {});
 
-  // 4. Calculate profit for each product
+  // 4. Calculate profit for each product using shared profit.ts
   const result = Object.values(grouped).map((item: any) => {
     const product = item.product;
-    const costPrice = product?.cost_price || 0;
-    // fba_fee_rate = Amazon紹介料率（%）例: 15 → 売上の15%
-    const fbaFeeRate = product?.fba_fee_rate || 15;
-    // fba_shipping_fee = FBA配送手数料（1個あたり固定額、円）例: 532
-    const fbaShippingFee = product?.fba_shipping_fee || 0;
-    // point_rate = 商品マスタの常設ポイント付与率（%）例: 1 → 売上の1%がポイント原資
-    const pointRate = product?.point_rate || 0;
     const ad = adByProduct[product?.id] || { ad_spend: 0, ad_sales: 0 };
-
-    // Cost calculations
-    const totalCost = costPrice * item.total_units;
-    // 紹介料 = 売上 × 紹介料率（Amazonが売上の%を徴収）
-    const totalReferralFee = Math.round(item.total_sales * (fbaFeeRate / 100));
-    // FBA配送手数料 = 1個あたり固定額 × 販売数量
-    const totalShippingFee = fbaShippingFee * item.total_units;
-    // FBA手数料合計 = 紹介料 + 配送手数料
-    const totalFbaFee = totalReferralFee + totalShippingFee;
-    // ポイント原資 = 商品マスタの常設ポイント + 施策カレンダーのイベントポイント
-    const basePointCost = Math.round(item.total_sales * (pointRate / 100));
-    const eventPointCost = item.event_point_cost || 0;
-    const totalPointCost = basePointCost + eventPointCost;
-    const totalAdSpend = ad.ad_spend;
-    // 経費（VINE費用・その他）
     const totalExpenses = expByProduct[product?.id] || 0;
 
-    // Gross profit = 売上 - 原価 - 紹介料 - FBA配送手数料 - ポイント原資
-    const grossProfit = item.total_sales - totalCost - totalFbaFee - totalPointCost;
-    // Net profit = Gross Profit - 広告費 - 経費
-    const netProfit = grossProfit - totalAdSpend - totalExpenses;
-    // Profit rate
-    const profitRate = item.total_sales > 0 ? (netProfit / item.total_sales) * 100 : 0;
-    // Unit profit
-    const unitProfit = item.total_units > 0 ? Math.round(netProfit / item.total_units) : 0;
+    // calcRowCosts を使うと月次集計でも同じ計算式が使われる。
+    // getProductSalesSummary では per-product の累計値で計算するため、
+    // 「全販売個数・全売上」に対して1回だけ calcRowCosts を呼ぶ。
+    const { cost: totalCost, fba_fee: totalFbaFee, point_cost: basePointCost } = calcRowCosts(
+      item.total_sales,
+      item.total_units,
+      product,
+    );
+    const totalPointCost = basePointCost + (item.event_point_cost || 0);
+    const totalAdSpend = ad.ad_spend;
+
+    const { gross_profit, net_profit, profit_rate } = calcNetProfit(
+      item.total_sales,
+      totalCost,
+      totalFbaFee,
+      totalPointCost,
+      totalAdSpend,
+      totalExpenses,
+    );
+
+    const totalReferralFee = Math.round(item.total_sales * ((product?.fba_fee_rate ?? 15) / 100));
+    const totalShippingFee = (product?.fba_shipping_fee ?? 0) * item.total_units;
+    const unitProfit = item.total_units > 0 ? Math.round(net_profit / item.total_units) : 0;
 
     return {
       ...item,
@@ -234,9 +228,9 @@ export async function getProductSalesSummary(params: {
       total_ad_spend: totalAdSpend,
       total_ad_sales: ad.ad_sales,
       total_expenses: totalExpenses,
-      gross_profit: grossProfit,
-      net_profit: netProfit,
-      profit_rate: profitRate,
+      gross_profit,
+      net_profit,
+      profit_rate,
       unit_profit: unitProfit,
     };
   });

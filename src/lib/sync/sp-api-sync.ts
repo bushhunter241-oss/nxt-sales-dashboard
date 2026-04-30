@@ -469,13 +469,22 @@ export async function syncTraffic(
 
           const { data: existing } = await db
             .from("daily_sales")
-            .select("id")
+            .select("id, source")
             .eq("product_id", productId)
             .eq("date", date)
             .maybeSingle();
 
           let error;
           if (existing) {
+            // Preserve manually corrected rows (CSV imports / BR backfill).
+            // syncTraffic must NEVER overwrite sales/sessions/orders/units on these rows,
+            // otherwise the next 2AM cron would erase yesterday's manual corrections.
+            if (existing.source === "csv" || existing.source === "csv-reimport") {
+              console.log(
+                `[SP-API Traffic] ${date} ${productId}: skip update (source=${existing.source}, manual correction preserved)`
+              );
+              continue;
+            }
             // Update traffic fields, preserve cancellations from orders sync
             ({ error } = await db
               .from("daily_sales")

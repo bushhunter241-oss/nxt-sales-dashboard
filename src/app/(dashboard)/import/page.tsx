@@ -72,22 +72,62 @@ export default function ImportPage() {
 
       if (importType === "business") {
         for (const row of rows as any[]) {
-          const asin = row["(子)ASIN"] || row["ASIN"] || row["asin"] || "";
+          // ASIN列: 全角括弧「（子）ASIN」・半角括弧「(子)ASIN」・「ASIN」の全パターンに対応
+          const asin =
+            row["（子）ASIN"] ||   // 現行BR CSV（全角括弧）
+            row["(子)ASIN"]  ||   // 旧形式（半角括弧）
+            row["ASIN"]      ||
+            row["asin"]      || "";
           const product = (products as any[]).find((p: any) => p.asin === asin);
-          if (!product) continue;
+          if (!product) { skipped++; continue; }
+
+          // セッション列: 「セッション数 - 合計」（現行）と「セッション - 合計」（旧形式）両対応
+          const sessions = parseInt(
+            row["セッション数 - 合計"] ||
+            row["セッション - 合計"]   ||
+            row["sessions"] || "0"
+          ) || 0;
+
+          // 注文数・販売個数
+          const orders = parseInt(
+            row["注文された商品点数"] || row["units_ordered"] || "0"
+          ) || 0;
+
+          // 売上額: 「注文商品の売上額」（現行）と「注文商品売上」（旧形式）両対応
+          const rawSales =
+            row["注文商品の売上額"] ||   // 現行BR CSV
+            row["注文商品売上"]    ||   // 旧形式
+            row["ordered_product_sales"] || "0";
+          const sales_amount = Math.round(
+            parseFloat(String(rawSales).replace(/[,¥￥]/g, "")) || 0
+          );
+
+          // CVR
+          const cvr = parseFloat(
+            row["注文商品点数のセッションのパーセンテージ"] ||
+            row["セッションのパーセンテージ - 注文商品点数"] || "0"
+          ) || 0;
 
           await upsertDailySales({
             product_id: product.id,
             date: reportDate,
-            sessions: parseInt(row["セッション - 合計"] || row["sessions"] || "0") || 0,
-            orders: parseInt(row["注文された商品点数"] || row["units_ordered"] || "0") || 0,
-            sales_amount: Math.round(parseFloat(row["注文商品売上"] || row["ordered_product_sales"] || "0") || 0),
-            units_sold: parseInt(row["注文された商品点数"] || row["units_ordered"] || "0") || 0,
-            cvr: parseFloat(row["セッションのパーセンテージ - 注文商品点数"] || "0") || 0,
+            sessions,
+            orders,
+            sales_amount,
+            units_sold: orders,
+            cvr,
             cancellations: 0,
             source: "csv",
           });
           imported++;
+        }
+
+        // 1件もインポートできなかった場合は原因を明示
+        if (imported === 0) {
+          const sampleKeys = rows.length > 0 ? Object.keys((rows as any[])[0]).join(", ") : "（行なし）";
+          throw new Error(
+            `0件インポート: ASINが一致する商品が見つかりませんでした。\nCSVの列名: ${sampleKeys}\n\nセラーセントラルから「詳細ページ 売上・トラフィック（子ASIN別）」CSVをダウンロードし直してください。`
+          );
         }
       } else if (importType === "advertising") {
         for (const row of rows as any[]) {

@@ -45,11 +45,14 @@ export function calcRowCosts(
   const pointRate     = product.point_rate        ?? 0;
 
   const cost       = costPrice * unitsSold;
-  const referral   = Math.round(salesAmount * (fbaFeeRate / 100));
+  // Math.round を外して浮動小数のまま返す。
+  // 複数行を合算してから calcNetProfit で1回だけ丸めることで
+  // 行ごとの丸め誤差が3ページ間で累積しなくなる。
+  const referral   = salesAmount * (fbaFeeRate / 100);
   const shipping   = shippingFee * unitsSold;
   const fba_fee    = referral + shipping;
-  const basePoint  = Math.round(salesAmount * (pointRate / 100));
-  const eventPoint = eventPointRate ? Math.round(salesAmount * (eventPointRate / 100)) : 0;
+  const basePoint  = salesAmount * (pointRate / 100);
+  const eventPoint = eventPointRate ? salesAmount * (eventPointRate / 100) : 0;
   const point_cost = basePoint + eventPoint;
 
   return { cost, fba_fee, point_cost };
@@ -73,8 +76,11 @@ export function calcNetProfit(
   adSpend: number,
   expenses: number
 ): NetProfitResult {
-  const gross_profit = salesAmount - cost - fbaFee - pointCost;
-  const net_profit   = gross_profit - adSpend - expenses;
+  // ここで初めて Math.round する（calcRowCosts は浮動小数を返す設計）。
+  // 行ごとに丸めた値を合算する方式と異なり、合算後に1回だけ丸めるため
+  // 日別・月別・商品別の3ページで同じ値になる。
+  const gross_profit = Math.round(salesAmount - cost - fbaFee - pointCost);
+  const net_profit   = Math.round(gross_profit - adSpend - expenses);
   const profit_rate  = salesAmount > 0 ? (net_profit / salesAmount) * 100 : 0;
   return { gross_profit, net_profit, profit_rate };
 }

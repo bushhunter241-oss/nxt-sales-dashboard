@@ -17,6 +17,7 @@ export async function getDailyAdvertising(params: {
       .from("daily_advertising")
       .select("*, product:products(*)")
       .order("date", { ascending: false })
+      .order("id",   { ascending: true })  // 同日複数行の順序を一意にしてページング重複を防ぐ
       .range(offset, offset + PAGE_SIZE - 1);
 
     if (params.startDate) query = query.gte("date", params.startDate);
@@ -79,6 +80,8 @@ export async function getDailyAdSpendByDate(params: {
     let query = supabase
       .from("daily_advertising")
       .select("date, ad_spend, product:products(is_archived, is_parent)")
+      .order("date", { ascending: false })
+      .order("id",   { ascending: true })  // 同日複数行の順序を一意にしてページング重複を防ぐ
       .range(offset, offset + PAGE_SIZE - 1);
 
     if (params.startDate) query = query.gte("date", params.startDate);

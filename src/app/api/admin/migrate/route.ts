@@ -39,6 +39,72 @@ const MIGRATIONS: Record<string, string> = {
     CREATE INDEX IF NOT EXISTS idx_daily_campaign_ad_date ON daily_campaign_advertising(date);
     CREATE INDEX IF NOT EXISTS idx_daily_campaign_ad_group ON daily_campaign_advertising(product_group);
   `,
+  "027_fix_rhinon_fee_rate": `
+    UPDATE products
+    SET fba_fee_rate = 10.0,
+        updated_at = NOW()
+    WHERE asin IN ('B0CF3XL3F9', 'B0CF3ZZHK9')
+      AND product_group = 'RHINON';
+
+    UPDATE products
+    SET fba_shipping_fee = 318,
+        updated_at = NOW()
+    WHERE asin = 'B0CF3XL3F9'
+      AND product_group = 'RHINON';
+  `,
+  "028_reconcile_rakuten_daily_sales": `
+    WITH sku_agg AS (
+      SELECT
+        manage_number,
+        date,
+        SUM(units_sold)::int   AS units_sold,
+        SUM(sales_amount)::int AS sales_amount,
+        SUM(orders)::int       AS orders
+      FROM rakuten_daily_sku_sales
+      GROUP BY manage_number, date
+    )
+    UPDATE rakuten_daily_sales rds
+    SET
+      units_sold   = sku_agg.units_sold,
+      sales_amount = sku_agg.sales_amount,
+      orders       = sku_agg.orders,
+      source       = 'rebuilt-from-sku'
+    FROM sku_agg
+    INNER JOIN rakuten_products rp ON rp.product_id = sku_agg.manage_number
+    WHERE rds.product_id = rp.id
+      AND rds.date       = sku_agg.date
+      AND (
+        rds.units_sold   <> sku_agg.units_sold
+        OR rds.sales_amount <> sku_agg.sales_amount
+        OR rds.orders       <> sku_agg.orders
+      );
+
+    INSERT INTO rakuten_daily_sales
+      (product_id, date, units_sold, sales_amount, orders, access_count, cvr, cancellations, source)
+    SELECT
+      rp.id,
+      sku_agg.date,
+      sku_agg.units_sold,
+      sku_agg.sales_amount,
+      sku_agg.orders,
+      0, 0, 0,
+      'rebuilt-from-sku'
+    FROM (
+      SELECT
+        manage_number,
+        date,
+        SUM(units_sold)::int   AS units_sold,
+        SUM(sales_amount)::int AS sales_amount,
+        SUM(orders)::int       AS orders
+      FROM rakuten_daily_sku_sales
+      GROUP BY manage_number, date
+    ) sku_agg
+    INNER JOIN rakuten_products rp ON rp.product_id = sku_agg.manage_number
+    LEFT JOIN rakuten_daily_sales rds
+      ON rds.product_id = rp.id
+     AND rds.date       = sku_agg.date
+    WHERE rds.id IS NULL;
+  `,
 };
 
 export async function POST(request: NextRequest) {
